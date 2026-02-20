@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -91,5 +93,48 @@ func TestNewAgentInstance_DefaultsTemperatureWhenUnset(t *testing.T) {
 
 	if agent.Temperature != 0.7 {
 		t.Fatalf("Temperature = %f, want %f", agent.Temperature, 0.7)
+	}
+}
+
+func TestNewAgentInstance_ReadOnlyContainerDisablesWriteAndEdit(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-instance-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         1234,
+				MaxToolIterations: 5,
+				Sandbox: config.AgentSandboxConfig{
+					Mode:            "all",
+					WorkspaceAccess: "ro",
+				},
+			},
+		},
+	}
+
+	provider := &mockProvider{}
+	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, provider)
+
+	writeRes := agent.Tools.Execute(context.Background(), "write_file", map[string]interface{}{
+		"path":    "a.txt",
+		"content": "hello",
+	})
+	if !writeRes.IsError || !strings.Contains(writeRes.ForLLM, "workspace_access=ro") {
+		t.Fatalf("write_file should be disabled in ro sandbox, got: %+v", writeRes)
+	}
+
+	editRes := agent.Tools.Execute(context.Background(), "edit_file", map[string]interface{}{
+		"path":     "a.txt",
+		"old_text": "h",
+		"new_text": "H",
+	})
+	if !editRes.IsError || !strings.Contains(editRes.ForLLM, "workspace_access=ro") {
+		t.Fatalf("edit_file should be disabled in ro sandbox, got: %+v", editRes)
 	}
 }

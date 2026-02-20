@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent/sandbox"
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
@@ -21,6 +22,7 @@ type ExecTool struct {
 	denyPatterns        []*regexp.Regexp
 	allowPatterns       []*regexp.Regexp
 	restrictToWorkspace bool
+	sandbox             sandbox.Sandbox
 }
 
 var defaultDenyPatterns = []*regexp.Regexp{
@@ -73,6 +75,10 @@ func NewExecTool(workingDir string, restrict bool) *ExecTool {
 }
 
 func NewExecToolWithConfig(workingDir string, restrict bool, config *config.Config) *ExecTool {
+	return NewExecToolWithSandbox(workingDir, restrict, config, nil)
+}
+
+func NewExecToolWithSandbox(workingDir string, restrict bool, config *config.Config, sb sandbox.Sandbox) *ExecTool {
 	denyPatterns := make([]*regexp.Regexp, 0)
 
 	enableDenyPatterns := true
@@ -107,6 +113,7 @@ func NewExecToolWithConfig(workingDir string, restrict bool, config *config.Conf
 		denyPatterns:        denyPatterns,
 		allowPatterns:       nil,
 		restrictToWorkspace: restrict,
+		sandbox:             sb,
 	}
 }
 
@@ -155,6 +162,38 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) *To
 
 	if guardError := t.guardCommand(command, cwd); guardError != "" {
 		return ErrorResult(guardError)
+	}
+
+	if t.sandbox != nil {
+		sandboxWD := t.resolveSandboxWorkingDir(cwd)
+		res, err := t.sandbox.Exec(ctx, sandbox.ExecRequest{
+			Command:    command,
+			WorkingDir: sandboxWD,
+			TimeoutMs:  t.timeout.Milliseconds(),
+		})
+		if err != nil {
+			return ErrorResult(fmt.Sprintf("sandbox exec failed: %v", err))
+		}
+		output := res.Stdout
+		if res.Stderr != "" {
+			output += "\nSTDERR:\n" + res.Stderr
+		}
+		if output == "" {
+			output = "(no output)"
+		}
+		if res.ExitCode != 0 {
+			output += fmt.Sprintf("\nExit code: %d", res.ExitCode)
+			return &ToolResult{
+				ForLLM:  output,
+				ForUser: output,
+				IsError: true,
+			}
+		}
+		return &ToolResult{
+			ForLLM:  output,
+			ForUser: output,
+			IsError: false,
+		}
 	}
 
 	// timeout == 0 means no timeout
@@ -224,18 +263,32 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) *To
 }
 
 func (t *ExecTool) guardCommand(command, cwd string) string {
+	return guardCommandWithPolicy(
+		command,
+		cwd,
+		t.restrictToWorkspace,
+		t.denyPatterns,
+		t.allowPatterns,
+	)
+}
+
+func guardCommandWithPolicy(
+	command, cwd string,
+	restrictToWorkspace bool,
+	denyPatterns, allowPatterns []*regexp.Regexp,
+) string {
 	cmd := strings.TrimSpace(command)
 	lower := strings.ToLower(cmd)
 
-	for _, pattern := range t.denyPatterns {
+	for _, pattern := range denyPatterns {
 		if pattern.MatchString(lower) {
 			return "Command blocked by safety guard (dangerous pattern detected)"
 		}
 	}
 
-	if len(t.allowPatterns) > 0 {
+	if len(allowPatterns) > 0 {
 		allowed := false
-		for _, pattern := range t.allowPatterns {
+		for _, pattern := range allowPatterns {
 			if pattern.MatchString(lower) {
 				allowed = true
 				break
@@ -246,7 +299,7 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 		}
 	}
 
-	if t.restrictToWorkspace {
+	if restrictToWorkspace {
 		if strings.Contains(cmd, "..\\") || strings.Contains(cmd, "../") {
 			return "Command blocked by safety guard (path traversal detected)"
 		}
@@ -277,6 +330,33 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 	}
 
 	return ""
+}
+
+func (t *ExecTool) resolveSandboxWorkingDir(cwd string) string {
+	trimmed := strings.TrimSpace(cwd)
+	if trimmed == "" {
+		return "."
+	}
+	if !filepath.IsAbs(trimmed) {
+		return trimmed
+	}
+	if strings.HasPrefix(filepath.ToSlash(trimmed), "/workspace") {
+		return filepath.ToSlash(trimmed)
+	}
+	base := strings.TrimSpace(t.workingDir)
+	if base != "" {
+		absBase, err := filepath.Abs(base)
+		if err == nil {
+			rel, err := filepath.Rel(absBase, trimmed)
+			if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+				if rel == "." {
+					return "."
+				}
+				return filepath.ToSlash(rel)
+			}
+		}
+	}
+	return "."
 }
 
 func (t *ExecTool) SetTimeout(timeout time.Duration) {

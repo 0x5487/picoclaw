@@ -92,7 +92,7 @@ func TestShellTool_Success(t *testing.T) {
 	tool := NewExecTool("", false)
 
 	ctx := context.Background()
-	args := map[string]interface{}{
+	args := map[string]any{
 		"command": "echo 'hello world'",
 	}
 
@@ -119,7 +119,7 @@ func TestShellTool_Failure(t *testing.T) {
 	tool := NewExecTool("", false)
 
 	ctx := context.Background()
-	args := map[string]interface{}{
+	args := map[string]any{
 		"command": "ls /nonexistent_directory_12345",
 	}
 
@@ -147,7 +147,7 @@ func TestShellTool_Timeout(t *testing.T) {
 	tool.SetTimeout(100 * time.Millisecond)
 
 	ctx := context.Background()
-	args := map[string]interface{}{
+	args := map[string]any{
 		"command": "sleep 10",
 	}
 
@@ -169,12 +169,12 @@ func TestShellTool_WorkingDir(t *testing.T) {
 	// Create temp directory
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "test.txt")
-	os.WriteFile(testFile, []byte("test content"), 0644)
+	os.WriteFile(testFile, []byte("test content"), 0o644)
 
 	tool := NewExecTool("", false)
 
 	ctx := context.Background()
-	args := map[string]interface{}{
+	args := map[string]any{
 		"command":     "cat test.txt",
 		"working_dir": tmpDir,
 	}
@@ -195,7 +195,7 @@ func TestShellTool_DangerousCommand(t *testing.T) {
 	tool := NewExecTool("", false)
 
 	ctx := context.Background()
-	args := map[string]interface{}{
+	args := map[string]any{
 		"command": "rm -rf /",
 	}
 
@@ -216,7 +216,7 @@ func TestShellTool_MissingCommand(t *testing.T) {
 	tool := NewExecTool("", false)
 
 	ctx := context.Background()
-	args := map[string]interface{}{}
+	args := map[string]any{}
 
 	result := tool.Execute(ctx, args)
 
@@ -231,7 +231,7 @@ func TestShellTool_StderrCapture(t *testing.T) {
 	tool := NewExecTool("", false)
 
 	ctx := context.Background()
-	args := map[string]interface{}{
+	args := map[string]any{
 		"command": "sh -c 'echo stdout; echo stderr >&2'",
 	}
 
@@ -252,7 +252,7 @@ func TestShellTool_OutputTruncation(t *testing.T) {
 
 	ctx := context.Background()
 	// Generate long output (>10000 chars)
-	args := map[string]interface{}{
+	args := map[string]any{
 		"command": "python3 -c \"print('x' * 20000)\" || echo " + strings.Repeat("x", 20000),
 	}
 
@@ -264,6 +264,66 @@ func TestShellTool_OutputTruncation(t *testing.T) {
 	}
 }
 
+// TestShellTool_WorkingDir_OutsideWorkspace verifies that working_dir cannot escape the workspace directly
+func TestShellTool_WorkingDir_OutsideWorkspace(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	outsideDir := filepath.Join(root, "outside")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("failed to create workspace: %v", err)
+	}
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatalf("failed to create outside dir: %v", err)
+	}
+
+	tool := NewExecTool(workspace, true)
+	result := tool.Execute(context.Background(), map[string]any{
+		"command":     "pwd",
+		"working_dir": outsideDir,
+	})
+
+	if !result.IsError {
+		t.Fatalf("expected working_dir outside workspace to be blocked, got output: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "blocked") {
+		t.Errorf("expected 'blocked' in error, got: %s", result.ForLLM)
+	}
+}
+
+// TestShellTool_WorkingDir_SymlinkEscape verifies that a symlink inside the workspace
+// pointing outside cannot be used as working_dir to escape the sandbox.
+func TestShellTool_WorkingDir_SymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	secretDir := filepath.Join(root, "secret")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("failed to create workspace: %v", err)
+	}
+	if err := os.MkdirAll(secretDir, 0o755); err != nil {
+		t.Fatalf("failed to create secret dir: %v", err)
+	}
+	os.WriteFile(filepath.Join(secretDir, "secret.txt"), []byte("top secret"), 0o644)
+
+	// symlink lives inside the workspace but resolves to secretDir outside it
+	link := filepath.Join(workspace, "escape")
+	if err := os.Symlink(secretDir, link); err != nil {
+		t.Skipf("symlinks not supported in this environment: %v", err)
+	}
+
+	tool := NewExecTool(workspace, true)
+	result := tool.Execute(context.Background(), map[string]any{
+		"command":     "cat secret.txt",
+		"working_dir": link,
+	})
+
+	if !result.IsError {
+		t.Fatalf("expected symlink working_dir escape to be blocked, got output: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "blocked") {
+		t.Errorf("expected 'blocked' in error, got: %s", result.ForLLM)
+	}
+}
+
 // TestShellTool_RestrictToWorkspace verifies workspace restriction
 func TestShellTool_RestrictToWorkspace(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -271,7 +331,7 @@ func TestShellTool_RestrictToWorkspace(t *testing.T) {
 	tool.SetRestrictToWorkspace(true)
 
 	ctx := context.Background()
-	args := map[string]interface{}{
+	args := map[string]any{
 		"command": "cat ../../etc/passwd",
 	}
 
@@ -283,7 +343,11 @@ func TestShellTool_RestrictToWorkspace(t *testing.T) {
 	}
 
 	if !strings.Contains(result.ForLLM, "blocked") && !strings.Contains(result.ForUser, "blocked") {
-		t.Errorf("Expected 'blocked' message for path traversal, got ForLLM: %s, ForUser: %s", result.ForLLM, result.ForUser)
+		t.Errorf(
+			"Expected 'blocked' message for path traversal, got ForLLM: %s, ForUser: %s",
+			result.ForLLM,
+			result.ForUser,
+		)
 	}
 }
 

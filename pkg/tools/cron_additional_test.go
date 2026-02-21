@@ -19,7 +19,7 @@ type cronStubSandbox struct {
 }
 
 func (s *cronStubSandbox) Start(ctx context.Context) error { return nil }
-func (s *cronStubSandbox) Stop(ctx context.Context) error  { return nil }
+func (s *cronStubSandbox) Prune(ctx context.Context) error { return nil }
 func (s *cronStubSandbox) Fs() sandbox.FsBridge            { return nil }
 func (s *cronStubSandbox) Exec(ctx context.Context, req sandbox.ExecRequest) (*sandbox.ExecResult, error) {
 	return s.ExecStream(ctx, req, nil)

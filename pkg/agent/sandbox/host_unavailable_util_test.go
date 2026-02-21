@@ -15,8 +15,8 @@ func TestHostSandbox_StartStopFs(t *testing.T) {
 	if err := sb.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error: %v", err)
 	}
-	if err := sb.Stop(context.Background()); err != nil {
-		t.Fatalf("Stop() error: %v", err)
+	if err := sb.Prune(context.Background()); err != nil {
+		t.Fatalf("Prune() error: %v", err)
 	}
 	if sb.Fs() == nil {
 		t.Fatal("Fs() returned nil")
@@ -110,8 +110,8 @@ func TestUnavailableSandboxAndUtilHelpers(t *testing.T) {
 	if err := sb.Start(context.Background()); err == nil {
 		t.Fatal("expected Start() error")
 	}
-	if err := sb.Stop(context.Background()); err != nil {
-		t.Fatalf("Stop() error: %v", err)
+	if err := sb.Prune(context.Background()); err != nil {
+		t.Fatalf("Prune() error: %v", err)
 	}
 	if _, err := sb.Exec(context.Background(), ExecRequest{Command: "echo hi"}); err == nil {
 		t.Fatal("expected Exec() error")

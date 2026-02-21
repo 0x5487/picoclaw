@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -154,9 +155,16 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 		if t.restrictToWorkspace && t.workingDir != "" {
 			resolvedWD, err := validatePath(wd, t.workingDir, true)
 			if err != nil {
-				return ErrorResult("Command blocked by safety guard (" + err.Error() + ")")
+				// In sandbox mode, allow explicit container workspace paths when
+				// restrict_to_workspace is enabled.
+				if t.sandbox != nil && filepath.IsAbs(wd) && isSandboxWorkspaceAbsolutePath(wd) {
+					cwd = wd
+				} else {
+					return ErrorResult("Command blocked by safety guard (" + err.Error() + ")")
+				}
+			} else {
+				cwd = resolvedWD
 			}
-			cwd = resolvedWD
 		} else {
 			cwd = wd
 		}
@@ -390,7 +398,14 @@ func (t *ExecTool) resolveSandboxWorkingDir(cwd string) string {
 			}
 		}
 	}
-	return "."
+	// Preserve explicit absolute paths in sandbox mode (e.g. /tmp/logs),
+	// instead of silently downgrading to ".".
+	return filepath.ToSlash(trimmed)
+}
+
+func isSandboxWorkspaceAbsolutePath(wd string) bool {
+	clean := path.Clean(filepath.ToSlash(strings.TrimSpace(wd)))
+	return clean == "/workspace" || strings.HasPrefix(clean, "/workspace/")
 }
 
 func (t *ExecTool) SetTimeout(timeout time.Duration) {

@@ -31,7 +31,7 @@ func (h *HostSandbox) Start(ctx context.Context) error {
 	return nil
 }
 
-func (h *HostSandbox) Stop(ctx context.Context) error {
+func (h *HostSandbox) Prune(ctx context.Context) error {
 	return nil
 }
 

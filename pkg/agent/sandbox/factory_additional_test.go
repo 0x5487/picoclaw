@@ -2,7 +2,10 @@ package sandbox
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 )
@@ -30,8 +33,8 @@ func TestNewFromConfig_HostMode(t *testing.T) {
 	if _, ok := sb.(*HostSandbox); !ok {
 		t.Fatalf("expected HostSandbox, got %T", sb)
 	}
-	if err := sb.Stop(context.Background()); err != nil {
-		t.Fatalf("Stop() error: %v", err)
+	if err := sb.Prune(context.Background()); err != nil {
+		t.Fatalf("Prune() error: %v", err)
 	}
 }
 
@@ -48,5 +51,49 @@ func TestNewFromConfig_AllModeReturnsUnavailableWhenBlocked(t *testing.T) {
 	}
 	if err := sb.Start(context.Background()); err == nil {
 		t.Fatal("expected unavailable sandbox start error")
+	}
+}
+
+func TestScopedSandboxManager_PruneLoopLifecycle(t *testing.T) {
+	m := &scopedSandboxManager{
+		mode:            "all",
+		pruneIdleHours:  1,
+		pruneMaxAgeDays: 0,
+		scoped:          map[string]Sandbox{},
+	}
+
+	m.ensurePruneLoop()
+	if m.loopStop == nil || m.loopDone == nil {
+		t.Fatal("expected manager prune loop to start")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	m.stopPruneLoop(ctx)
+	if m.loopStop != nil || m.loopDone != nil {
+		t.Fatal("expected manager prune loop state reset after stop")
+	}
+}
+
+func TestScopedSandboxManager_PruneOnceLoadRegistryError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stateDir := filepath.Join(home, ".picoclaw", "state", "sandbox")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	regPath := filepath.Join(stateDir, "containers.json")
+	if err := os.WriteFile(regPath, []byte("{not-json"), 0o644); err != nil {
+		t.Fatalf("write invalid registry: %v", err)
+	}
+
+	m := &scopedSandboxManager{
+		mode:            "all",
+		pruneIdleHours:  1,
+		pruneMaxAgeDays: 0,
+		scoped:          map[string]Sandbox{},
+	}
+	if err := m.pruneOnce(context.Background()); err == nil {
+		t.Fatal("expected pruneOnce() to return registry load error")
 	}
 }

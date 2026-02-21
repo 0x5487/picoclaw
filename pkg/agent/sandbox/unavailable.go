@@ -22,7 +22,7 @@ func NewUnavailableSandbox(err error) Sandbox {
 }
 
 func (u *unavailableSandbox) Start(ctx context.Context) error { return u.err }
-func (u *unavailableSandbox) Stop(ctx context.Context) error  { return nil }
+func (u *unavailableSandbox) Prune(ctx context.Context) error { return nil }
 func (u *unavailableSandbox) Fs() FsBridge                    { return u.fs }
 func (u *unavailableSandbox) Exec(ctx context.Context, req ExecRequest) (*ExecResult, error) {
 	return aggregateExecStream(func(onEvent func(ExecEvent) error) (*ExecResult, error) {

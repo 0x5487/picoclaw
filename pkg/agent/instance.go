@@ -74,27 +74,15 @@ func NewAgentInstance(
 	roContainer := isContainerReadOnlySandbox(cfg)
 	toolsRegistry := tools.NewToolRegistry()
 	toolsRegistry.Register(tools.NewReadFileToolWithSandbox(workspace, restrict, readSb))
-	if roContainer {
-		toolsRegistry.Register(tools.NewDisabledTool(
-			"write_file",
-			"Write content to a file",
-			"write_file is disabled when sandbox workspace_access=ro",
-		))
-	} else {
+	if !roContainer {
 		toolsRegistry.Register(tools.NewWriteFileToolWithSandbox(workspace, restrict, writeSb))
 	}
 	toolsRegistry.Register(tools.NewListDirTool(workspace, restrict))
 	toolsRegistry.Register(tools.NewExecToolWithSandbox(workspace, restrict, cfg, execSb))
-	if roContainer {
-		toolsRegistry.Register(tools.NewDisabledTool(
-			"edit_file",
-			"Edit a file by replacing old_text with new_text. The old_text must exist exactly in the file.",
-			"edit_file is disabled when sandbox workspace_access=ro",
-		))
-	} else {
+	if !roContainer {
 		toolsRegistry.Register(tools.NewEditFileTool(workspace, restrict))
+		toolsRegistry.Register(tools.NewAppendFileTool(workspace, restrict))
 	}
-	toolsRegistry.Register(tools.NewAppendFileTool(workspace, restrict))
 
 	sessionsDir := filepath.Join(workspace, "sessions")
 	sessionsManager := session.NewSessionManager(sessionsDir)

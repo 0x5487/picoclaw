@@ -11,9 +11,11 @@ type Sandbox interface {
 	// Implementations should prepare resources that are expensive to set up lazily
 	// (for example, container client connectivity checks).
 	Start(ctx context.Context) error
-	// Stop releases runtime resources acquired by Start.
+	// Prune performs sandbox resource reclamation.
+	// Implementations should release reclaimable runtime resources and remove
+	// sandbox artifacts (for example containers) according to their policy.
 	// It should be safe to call multiple times.
-	Stop(ctx context.Context) error
+	Prune(ctx context.Context) error
 	// Exec runs a command in sandbox context.
 	// Command/Args semantics follow ExecRequest; a non-zero exit code should be
 	// returned in ExecResult.ExitCode, while transport/runtime failures return error.

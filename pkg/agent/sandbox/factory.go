@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/routing"
@@ -22,7 +23,7 @@ func NewFromConfig(workspace string, restrict bool, cfg *config.Config) Sandbox 
 
 // NewFromConfigWithAgent builds a sandbox instance with an explicit agent ID context.
 func NewFromConfigWithAgent(workspace string, restrict bool, cfg *config.Config, agentID string) Sandbox {
-	mode := "off"
+	mode := "all"
 	scope := "agent"
 	workspaceAccess := "none"
 	workspaceRoot := "~/.picoclaw/sandboxes"
@@ -172,17 +173,26 @@ type scopedSandboxManager struct {
 	mu     sync.Mutex
 	scoped map[string]Sandbox
 	fs     FsBridge
+
+	loopMu   sync.Mutex
+	loopStop context.CancelFunc
+	loopDone chan struct{}
 }
 
 func (m *scopedSandboxManager) Start(ctx context.Context) error {
 	if m.mode == "off" {
 		return nil
 	}
-	_, err := m.getOrCreateSandbox(ctx, m.defaultScopeKey())
-	return err
+	if _, err := m.getOrCreateSandbox(ctx, m.defaultScopeKey()); err != nil {
+		return err
+	}
+	m.ensurePruneLoop()
+	return nil
 }
 
-func (m *scopedSandboxManager) Stop(ctx context.Context) error {
+func (m *scopedSandboxManager) Prune(ctx context.Context) error {
+	m.stopPruneLoop(ctx)
+
 	m.mu.Lock()
 	scoped := make([]Sandbox, 0, len(m.scoped))
 	for _, sb := range m.scoped {
@@ -192,10 +202,115 @@ func (m *scopedSandboxManager) Stop(ctx context.Context) error {
 
 	var firstErr error
 	for _, sb := range scoped {
-		if err := sb.Stop(ctx); err != nil && firstErr == nil {
+		if err := sb.Prune(ctx); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
+	return firstErr
+}
+
+func (m *scopedSandboxManager) ensurePruneLoop() {
+	if m.pruneIdleHours <= 0 && m.pruneMaxAgeDays <= 0 {
+		return
+	}
+	m.loopMu.Lock()
+	defer m.loopMu.Unlock()
+	if m.loopStop != nil {
+		return
+	}
+
+	loopCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	m.loopStop = cancel
+	m.loopDone = done
+
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer func() {
+			ticker.Stop()
+			close(done)
+		}()
+		for {
+			select {
+			case <-loopCtx.Done():
+				return
+			case <-ticker.C:
+				_ = m.pruneOnce(loopCtx)
+			}
+		}
+	}()
+}
+
+func (m *scopedSandboxManager) stopPruneLoop(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.loopMu.Lock()
+	stop := m.loopStop
+	done := m.loopDone
+	m.loopStop = nil
+	m.loopDone = nil
+	m.loopMu.Unlock()
+	if stop == nil {
+		return
+	}
+	stop()
+	if done == nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+}
+
+func (m *scopedSandboxManager) pruneOnce(ctx context.Context) error {
+	if m.pruneIdleHours <= 0 && m.pruneMaxAgeDays <= 0 {
+		return nil
+	}
+
+	regPath := filepath.Join(resolvePicoClawHomeDir(), "state", "sandbox", defaultSandboxRegistryFile)
+	registryMu.Lock()
+	data, err := loadRegistry(regPath)
+	registryMu.Unlock()
+	if err != nil {
+		return err
+	}
+
+	pruneCfg := ContainerSandboxConfig{
+		PruneIdleHours:  m.pruneIdleHours,
+		PruneMaxAgeDays: m.pruneMaxAgeDays,
+	}
+	now := time.Now().UnixMilli()
+
+	m.mu.Lock()
+	byContainer := make(map[string]Sandbox, len(m.scoped))
+	for _, sb := range m.scoped {
+		if containerSb, ok := sb.(*ContainerSandbox); ok {
+			byContainer[containerSb.cfg.ContainerName] = sb
+		}
+	}
+	m.mu.Unlock()
+
+	var firstErr error
+	for _, entry := range data.Entries {
+		if !shouldPruneEntry(pruneCfg, now, entry) {
+			continue
+		}
+		if sb, ok := byContainer[entry.ContainerName]; ok {
+			if err := sb.Prune(ctx); err != nil && firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if err := stopAndRemoveContainerByName(ctx, entry.ContainerName); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		if err := removeRegistryEntry(regPath, entry.ContainerName); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
 	return firstErr
 }
 

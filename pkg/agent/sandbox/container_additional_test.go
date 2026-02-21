@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/client"
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
@@ -24,7 +23,7 @@ func TestContainerSandbox_StartCreatesWorkspaceBeforeDockerPing(t *testing.T) {
 
 	err := sb.Start(context.Background())
 	if err == nil {
-		_ = sb.Stop(context.Background())
+		_ = sb.Prune(context.Background())
 		t.Skip("docker daemon available in this environment; skip unavailable-path assertion")
 	}
 	if !strings.Contains(err.Error(), "docker daemon unavailable") {
@@ -38,50 +37,14 @@ func TestContainerSandbox_StartCreatesWorkspaceBeforeDockerPing(t *testing.T) {
 	}
 }
 
-func TestContainerSandbox_PruneLoopLifecycleAndNoopPrune(t *testing.T) {
+func TestContainerSandbox_NoopPruneWithoutClient(t *testing.T) {
 	sb := NewContainerSandbox(ContainerSandboxConfig{
 		PruneIdleHours:  1,
 		PruneMaxAgeDays: 0,
 	})
 
-	sb.ensurePruneLoop()
-	if sb.loopStop == nil || sb.loopDone == nil {
-		t.Fatal("expected prune loop to start")
-	}
-	sb.stopPruneLoop(nil)
-	if sb.loopStop != nil || sb.loopDone != nil {
-		t.Fatal("expected prune loop state reset after stop")
-	}
-
-	if err := sb.maybePrune(context.Background()); err != nil {
-		t.Fatalf("maybePrune() with nil client should be noop, got: %v", err)
-	}
-}
-
-func TestContainerSandbox_MaybePruneDisabledAndLoadError(t *testing.T) {
-	disabled := NewContainerSandbox(ContainerSandboxConfig{})
-	if err := disabled.maybePrune(context.Background()); err != nil {
-		t.Fatalf("maybePrune() should return nil when both prune rules disabled: %v", err)
-	}
-
-	root := t.TempDir()
-	stateDir := filepath.Join(root, "state")
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
-		t.Fatalf("mkdir state dir: %v", err)
-	}
-	regPath := filepath.Join(stateDir, "registry.json")
-	if err := os.WriteFile(regPath, []byte("{not-json"), 0o644); err != nil {
-		t.Fatalf("write invalid registry: %v", err)
-	}
-
-	sb := NewContainerSandbox(ContainerSandboxConfig{
-		WorkspaceRoot:   root,
-		PruneIdleHours:  1,
-		PruneMaxAgeDays: 0,
-	})
-	sb.cli = &client.Client{}
-	if err := sb.maybePrune(context.Background()); err == nil {
-		t.Fatal("expected maybePrune() to return registry load error")
+	if err := sb.Prune(context.Background()); err != nil {
+		t.Fatalf("Prune() with nil client should be noop, got: %v", err)
 	}
 }
 
@@ -215,11 +178,10 @@ func TestContainerSandbox_StopWithoutClient(t *testing.T) {
 		PruneIdleHours:  1,
 		PruneMaxAgeDays: 1,
 	})
-	sb.ensurePruneLoop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := sb.Stop(ctx); err != nil {
-		t.Fatalf("Stop() error: %v", err)
+	if err := sb.Prune(ctx); err != nil {
+		t.Fatalf("Prune() error: %v", err)
 	}
 }

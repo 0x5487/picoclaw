@@ -19,7 +19,7 @@ type stubSandbox struct {
 }
 
 func (s *stubSandbox) Start(ctx context.Context) error { return nil }
-func (s *stubSandbox) Stop(ctx context.Context) error  { return nil }
+func (s *stubSandbox) Prune(ctx context.Context) error { return nil }
 func (s *stubSandbox) Fs() sandbox.FsBridge            { return nil }
 func (s *stubSandbox) Exec(ctx context.Context, req sandbox.ExecRequest) (*sandbox.ExecResult, error) {
 	return sandboxAggregateFromStub(ctx, req, s.ExecStream)
@@ -370,7 +370,7 @@ func TestShellTool_SandboxMapsHostWorkingDirToRelative(t *testing.T) {
 	}
 }
 
-func TestShellTool_SandboxUsesDotForUnmappedAbsoluteDir(t *testing.T) {
+func TestShellTool_SandboxAllowsAbsoluteWorkspaceWorkingDir(t *testing.T) {
 	workspace := t.TempDir()
 	sb := &stubSandbox{}
 	tool := NewExecToolWithSandbox(workspace, true, nil, sb)
@@ -378,14 +378,33 @@ func TestShellTool_SandboxUsesDotForUnmappedAbsoluteDir(t *testing.T) {
 	ctx := context.Background()
 	args := map[string]interface{}{
 		"command":     "echo test",
-		"working_dir": "/outside/path",
+		"working_dir": "/workspace/subdir",
 	}
 	result := tool.Execute(ctx, args)
 	if result.IsError {
 		t.Fatalf("expected success, got error: %s", result.ForLLM)
 	}
-	if sb.lastReq.WorkingDir != "." {
-		t.Fatalf("sandbox working_dir = %q, want .", sb.lastReq.WorkingDir)
+	if sb.lastReq.WorkingDir != "/workspace/subdir" {
+		t.Fatalf("sandbox working_dir = %q, want /workspace/subdir", sb.lastReq.WorkingDir)
+	}
+}
+
+func TestShellTool_SandboxBlocksAbsoluteNonWorkspaceWorkingDirWhenRestricted(t *testing.T) {
+	workspace := t.TempDir()
+	sb := &stubSandbox{}
+	tool := NewExecToolWithSandbox(workspace, true, nil, sb)
+
+	ctx := context.Background()
+	args := map[string]interface{}{
+		"command":     "echo test",
+		"working_dir": "/tmp/logs",
+	}
+	result := tool.Execute(ctx, args)
+	if !result.IsError {
+		t.Fatalf("expected error for /tmp/logs with restrict_to_workspace=true, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "blocked") {
+		t.Fatalf("expected blocked error, got: %s", result.ForLLM)
 	}
 }
 

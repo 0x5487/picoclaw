@@ -47,7 +47,7 @@ func TestContainerSandbox_Integration_ExecReadWrite(t *testing.T) {
 		t.Fatalf("sandbox start failed: %v", err)
 	}
 	defer func() {
-		_ = sb.Stop(context.Background())
+		_ = sb.Prune(context.Background())
 		if sb.cli != nil {
 			_ = sb.cli.ContainerRemove(context.Background(), containerName, container.RemoveOptions{Force: true})
 		}
@@ -134,7 +134,7 @@ func TestContainerSandbox_Integration_WriteFileMkdirInContainerTmp(t *testing.T)
 		t.Fatalf("sandbox start failed: %v", err)
 	}
 	defer func() {
-		_ = sb.Stop(context.Background())
+		_ = sb.Prune(context.Background())
 		if sb.cli != nil {
 			_ = sb.cli.ContainerRemove(context.Background(), containerName, container.RemoveOptions{Force: true})
 		}
@@ -183,7 +183,7 @@ func TestContainerSandbox_Integration_SetupCommandSuccess(t *testing.T) {
 		t.Fatalf("sandbox start failed: %v", err)
 	}
 	defer func() {
-		_ = sb.Stop(context.Background())
+		_ = sb.Prune(context.Background())
 		if sb.cli != nil {
 			_ = sb.cli.ContainerRemove(context.Background(), containerName, container.RemoveOptions{Force: true})
 		}
@@ -227,7 +227,7 @@ func TestContainerSandbox_Integration_SetupCommandFailureRemovesContainer(t *tes
 		t.Fatalf("sandbox start failed: %v", err)
 	}
 	defer func() {
-		_ = sb.Stop(context.Background())
+		_ = sb.Prune(context.Background())
 		if sb.cli != nil {
 			_ = sb.cli.ContainerRemove(context.Background(), containerName, container.RemoveOptions{Force: true})
 		}
@@ -271,7 +271,7 @@ func TestContainerSandbox_Integration_MaybePruneRemovesOldContainer(t *testing.T
 		t.Fatalf("sandbox start failed: %v", err)
 	}
 	defer func() {
-		_ = sb.Stop(context.Background())
+		_ = sb.Prune(context.Background())
 		if sb.cli != nil {
 			_ = sb.cli.ContainerRemove(context.Background(), containerName, container.RemoveOptions{Force: true})
 		}
@@ -292,8 +292,15 @@ func TestContainerSandbox_Integration_MaybePruneRemovesOldContainer(t *testing.T
 		t.Fatalf("upsert old registry entry failed: %v", err)
 	}
 
-	if err := sb.maybePrune(ctx); err != nil {
-		t.Fatalf("maybePrune failed: %v", err)
+	manager := &scopedSandboxManager{
+		pruneIdleHours:  1,
+		pruneMaxAgeDays: 0,
+		scoped: map[string]Sandbox{
+			"agent:main": sb,
+		},
+	}
+	if err := manager.pruneOnce(ctx); err != nil {
+		t.Fatalf("pruneOnce failed: %v", err)
 	}
 
 	if _, err := sb.cli.ContainerInspect(ctx, containerName); err == nil {
@@ -333,7 +340,7 @@ func TestContainerSandbox_Integration_ExecTimeoutRespectsRequest(t *testing.T) {
 		t.Fatalf("sandbox start failed: %v", err)
 	}
 	defer func() {
-		_ = sb.Stop(context.Background())
+		_ = sb.Prune(context.Background())
 		if sb.cli != nil {
 			_ = sb.cli.ContainerRemove(context.Background(), containerName, container.RemoveOptions{Force: true})
 		}

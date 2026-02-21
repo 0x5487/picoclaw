@@ -14,7 +14,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -64,10 +63,9 @@ type ContainerSandbox struct {
 	startErr error
 	fs       FsBridge
 	hash     string
-	loopMu   sync.Mutex
-	loopStop context.CancelFunc
-	loopDone chan struct{}
 }
+
+const defaultSandboxRegistryFile = "containers.json"
 
 // NewContainerSandbox creates a container sandbox with normalized defaults and precomputed config hash.
 func NewContainerSandbox(cfg ContainerSandboxConfig) *ContainerSandbox {
@@ -103,7 +101,7 @@ func NewContainerSandbox(cfg ContainerSandboxConfig) *ContainerSandbox {
 	return sb
 }
 
-// Start initializes docker connectivity, validates config, and starts background prune scheduling.
+// Start initializes docker connectivity and validates sandbox runtime requirements.
 func (c *ContainerSandbox) Start(ctx context.Context) error {
 	if err := validateSandboxSecurity(c.cfg); err != nil {
 		c.startErr = err
@@ -148,74 +146,28 @@ func (c *ContainerSandbox) Start(ctx context.Context) error {
 	}
 
 	c.startErr = nil
-	_ = c.maybePrune(ctx)
-	c.ensurePruneLoop()
 	return nil
 }
 
-// Stop terminates background prune scheduling and stops the managed container if present.
-func (c *ContainerSandbox) Stop(ctx context.Context) error {
-	c.stopPruneLoop(ctx)
-	if c.cli == nil {
+// Prune reclaims container sandbox resources.
+// This is the container-specific cleanup boundary where implementations should
+// stop and remove this sandbox container.
+func (c *ContainerSandbox) Prune(ctx context.Context) error {
+	containerName := strings.TrimSpace(c.cfg.ContainerName)
+	if containerName == "" {
 		return nil
 	}
-	if c.cfg.ContainerName != "" {
-		_ = c.cli.ContainerStop(ctx, c.cfg.ContainerName, container.StopOptions{})
-	}
-	return nil
-}
 
-func (c *ContainerSandbox) ensurePruneLoop() {
-	if c.cfg.PruneIdleHours <= 0 && c.cfg.PruneMaxAgeDays <= 0 {
-		return
-	}
-	c.loopMu.Lock()
-	defer c.loopMu.Unlock()
-	if c.loopStop != nil {
-		return
-	}
-	loopCtx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	c.loopStop = cancel
-	c.loopDone = done
-	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
-		defer func() {
-			ticker.Stop()
-			close(done)
-		}()
-		for {
-			select {
-			case <-loopCtx.Done():
-				return
-			case <-ticker.C:
-				_ = c.maybePrune(loopCtx)
-			}
+	var firstErr error
+	if c.cli != nil {
+		if err := c.stopAndRemoveContainer(ctx, containerName); err != nil {
+			firstErr = err
 		}
-	}()
-}
-
-func (c *ContainerSandbox) stopPruneLoop(ctx context.Context) {
-	if ctx == nil {
-		ctx = context.Background()
 	}
-	c.loopMu.Lock()
-	stop := c.loopStop
-	done := c.loopDone
-	c.loopStop = nil
-	c.loopDone = nil
-	c.loopMu.Unlock()
-	if stop == nil {
-		return
+	if err := removeRegistryEntry(c.registryPath(), containerName); err != nil && firstErr == nil {
+		firstErr = err
 	}
-	stop()
-	if done == nil {
-		return
-	}
-	select {
-	case <-done:
-	case <-ctx.Done():
-	}
+	return firstErr
 }
 
 // Exec ensures the container is ready and runs the requested command inside the sandbox.
@@ -306,8 +258,6 @@ func (c *ContainerSandbox) Fs() FsBridge {
 }
 
 func (c *ContainerSandbox) ensureContainer(ctx context.Context) error {
-	_ = c.maybePrune(ctx)
-
 	inspect, err := c.cli.ContainerInspect(ctx, c.cfg.ContainerName)
 	if err != nil {
 		return c.createAndStart(ctx)
@@ -421,37 +371,49 @@ func (c *ContainerSandbox) binds() []string {
 }
 
 func (c *ContainerSandbox) registryPath() string {
-	root := strings.TrimSpace(c.cfg.WorkspaceRoot)
-	if root == "" {
-		root = strings.TrimSpace(c.cfg.Workspace)
-	}
-	if root == "" {
-		root = osTempDir()
-	}
-	return filepath.Join(root, "state", "registry.json")
+	return filepath.Join(c.sandboxStateDir(), defaultSandboxRegistryFile)
 }
 
-func (c *ContainerSandbox) maybePrune(ctx context.Context) error {
-	if c.cfg.PruneIdleHours <= 0 && c.cfg.PruneMaxAgeDays <= 0 {
+func (c *ContainerSandbox) sandboxStateDir() string {
+	return filepath.Join(resolvePicoClawHomeDir(), "state", "sandbox")
+}
+
+func resolvePicoClawHomeDir() string {
+	if envHome := strings.TrimSpace(os.Getenv("PICOCLAW_HOME")); envHome != "" {
+		if abs := resolveAbsPath(expandHomePath(envHome)); strings.TrimSpace(abs) != "" {
+			return abs
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		return filepath.Join(home, ".picoclaw")
+	}
+	return filepath.Join(osTempDir(), ".picoclaw")
+}
+
+func (c *ContainerSandbox) stopAndRemoveContainer(ctx context.Context, containerName string) error {
+	timeout := 10
+	_ = c.cli.ContainerStop(ctx, containerName, container.StopOptions{Timeout: &timeout})
+	if err := c.cli.ContainerRemove(ctx, containerName, container.RemoveOptions{Force: true}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func stopAndRemoveContainerByName(ctx context.Context, containerName string) error {
+	name := strings.TrimSpace(containerName)
+	if name == "" {
 		return nil
 	}
-	if c.cli == nil {
-		return nil
-	}
-	regPath := c.registryPath()
-	registryMu.Lock()
-	data, err := loadRegistry(regPath)
-	registryMu.Unlock()
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return err
 	}
-	now := time.Now().UnixMilli()
-	for _, e := range data.Entries {
-		if !shouldPruneEntry(c.cfg, now, e) {
-			continue
-		}
-		_ = c.cli.ContainerRemove(ctx, e.ContainerName, container.RemoveOptions{Force: true})
-		_ = removeRegistryEntry(regPath, e.ContainerName)
+	defer cli.Close()
+
+	timeout := 10
+	_ = cli.ContainerStop(ctx, name, container.StopOptions{Timeout: &timeout})
+	if err := cli.ContainerRemove(ctx, name, container.RemoveOptions{Force: true}); err != nil {
+		return err
 	}
 	return nil
 }

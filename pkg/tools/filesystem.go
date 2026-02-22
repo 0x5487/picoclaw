@@ -9,6 +9,77 @@ import (
 	"time"
 )
 
+// validatePath ensures the given path is within the workspace if restrict is true.
+func validatePath(path, workspace string, restrict bool) (string, error) {
+	if workspace == "" {
+		return path, nil
+	}
+
+	absWorkspace, err := filepath.Abs(workspace)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve workspace path: %w", err)
+	}
+
+	var absPath string
+	if filepath.IsAbs(path) {
+		absPath = filepath.Clean(path)
+	} else {
+		absPath, err = filepath.Abs(filepath.Join(absWorkspace, path))
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve file path: %w", err)
+		}
+	}
+
+	if restrict {
+		if !isWithinWorkspace(absPath, absWorkspace) {
+			return "", fmt.Errorf("access denied: path is outside the workspace")
+		}
+
+		var resolved string
+		workspaceReal := absWorkspace
+		if resolved, err = filepath.EvalSymlinks(absWorkspace); err == nil {
+			workspaceReal = resolved
+		}
+
+		if resolved, err = filepath.EvalSymlinks(absPath); err == nil {
+			if !isWithinWorkspace(resolved, workspaceReal) {
+				return "", fmt.Errorf("access denied: symlink resolves outside workspace")
+			}
+		} else if os.IsNotExist(err) {
+			var parentResolved string
+			if parentResolved, err = resolveExistingAncestor(filepath.Dir(absPath)); err == nil {
+				if !isWithinWorkspace(parentResolved, workspaceReal) {
+					return "", fmt.Errorf("access denied: symlink resolves outside workspace")
+				}
+			} else if !os.IsNotExist(err) {
+				return "", fmt.Errorf("failed to resolve path: %w", err)
+			}
+		} else {
+			return "", fmt.Errorf("failed to resolve path: %w", err)
+		}
+	}
+
+	return absPath, nil
+}
+
+func resolveExistingAncestor(path string) (string, error) {
+	for current := filepath.Clean(path); ; current = filepath.Dir(current) {
+		if resolved, err := filepath.EvalSymlinks(current); err == nil {
+			return resolved, nil
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+		if filepath.Dir(current) == current {
+			return "", os.ErrNotExist
+		}
+	}
+}
+
+func isWithinWorkspace(candidate, workspace string) bool {
+	rel, err := filepath.Rel(filepath.Clean(workspace), filepath.Clean(candidate))
+	return err == nil && filepath.IsLocal(rel)
+}
+
 type ReadFileTool struct {
 	workspace string
 	restrict  bool
@@ -26,11 +97,11 @@ func (t *ReadFileTool) Description() string {
 	return "Read the contents of a file"
 }
 
-func (t *ReadFileTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *ReadFileTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"path": map[string]interface{}{
+		"properties": map[string]any{
+			"path": map[string]any{
 				"type":        "string",
 				"description": "Path to the file to read",
 			},
@@ -39,7 +110,7 @@ func (t *ReadFileTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{}) *ToolResult {
+func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	path, ok := args["path"].(string)
 	if !ok {
 		return ErrorResult("path is required")
@@ -79,15 +150,15 @@ func (t *WriteFileTool) Description() string {
 	return "Write content to a file"
 }
 
-func (t *WriteFileTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *WriteFileTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"path": map[string]interface{}{
+		"properties": map[string]any{
+			"path": map[string]any{
 				"type":        "string",
 				"description": "Path to the file to write",
 			},
-			"content": map[string]interface{}{
+			"content": map[string]any{
 				"type":        "string",
 				"description": "Content to write to the file",
 			},
@@ -96,7 +167,7 @@ func (t *WriteFileTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}) *ToolResult {
+func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	path, ok := args["path"].(string)
 	if !ok {
 		return ErrorResult("path is required")
@@ -140,11 +211,11 @@ func (t *ListDirTool) Description() string {
 	return "List files and directories in a path"
 }
 
-func (t *ListDirTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *ListDirTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"path": map[string]interface{}{
+		"properties": map[string]any{
+			"path": map[string]any{
 				"type":        "string",
 				"description": "Path to list",
 			},
@@ -153,7 +224,7 @@ func (t *ListDirTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *ListDirTool) Execute(ctx context.Context, args map[string]interface{}) *ToolResult {
+func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	path, ok := args["path"].(string)
 	if !ok {
 		path = "."
@@ -261,7 +332,6 @@ func (r *rootRW) Read(path string) ([]byte, error) {
 func (r *rootRW) Write(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	if dir != "." && dir != "/" {
-		// Use native root.MkdirAll which handles the "file exists at path" check internally.
 		if err := r.root.MkdirAll(dir, 0755); err != nil {
 			return fmt.Errorf("failed to create parent directories: %w", err)
 		}
@@ -294,27 +364,23 @@ func (r *rootRW) Write(path string, data []byte) error {
 // Helper to get a safe relative path for os.Root usage
 func getSafeRelPath(workspace, path string) (string, error) {
 	if workspace == "" {
-		return "", fmt.Errorf("workspace is empty and not defined")
+		return "", fmt.Errorf("workspace is not defined")
 	}
 
-	path = filepath.Clean(path)
-
-	// If absolute, make it relative to workspace
-	// os.Root only accepts relative paths
-	if filepath.IsAbs(path) {
-		rel, err := filepath.Rel(workspace, path)
+	rel := filepath.Clean(path)
+	if filepath.IsAbs(rel) {
+		var err error
+		rel, err = filepath.Rel(workspace, rel)
 		if err != nil {
 			return "", fmt.Errorf("failed to calculate relative path: %w", err)
 		}
-		path = rel
 	}
 
-	// Check for escape manually (defense-in-depth, as os.Root also rejects paths that escape the root)
-	if path == ".." || strings.HasPrefix(path, "../") {
+	if !filepath.IsLocal(rel) {
 		return "", fmt.Errorf("path escapes workspace: %s", path)
 	}
 
-	return path, nil
+	return rel, nil
 }
 
 // executeInRoot executes a function within the safety of os.Root

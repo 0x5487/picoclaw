@@ -277,7 +277,7 @@ func (h *hostFs) ReadDir(path string) ([]os.DirEntry, error) {
 
 func (h *hostFs) WriteFile(path string, data []byte) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("failed to create parent directories: %w", err)
 	}
 
@@ -285,7 +285,7 @@ func (h *hostFs) WriteFile(path string, data []byte) error {
 	// This prevents the target file from being left in a truncated or partial state
 	// if the operation is interrupted, as the rename operation is atomic on Linux.
 	tmpPath := fmt.Sprintf("%s.%d.tmp", path, time.Now().UnixNano())
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
 		os.Remove(tmpPath) // Ensure cleanup of partial/empty temp file
 		return fmt.Errorf("failed to write temp file: %w", err)
 	}
@@ -330,7 +330,8 @@ func (r *sandboxFs) ReadFile(path string) ([]byte, error) {
 				return fmt.Errorf("failed to read file: file not found: %w", err)
 			}
 			// os.Root returns "escapes from parent" for paths outside the root
-			if os.IsPermission(err) || strings.Contains(err.Error(), "escapes from parent") || strings.Contains(err.Error(), "permission denied") {
+			if os.IsPermission(err) || strings.Contains(err.Error(), "escapes from parent") ||
+				strings.Contains(err.Error(), "permission denied") {
 				return fmt.Errorf("failed to read file: access denied: %w", err)
 			}
 			return fmt.Errorf("failed to read file: %w", err)
@@ -345,7 +346,7 @@ func (r *sandboxFs) WriteFile(path string, data []byte) error {
 	return r.execute(path, func(root *os.Root, relPath string) error {
 		dir := filepath.Dir(relPath)
 		if dir != "." && dir != "/" {
-			if err := root.MkdirAll(dir, 0755); err != nil {
+			if err := root.MkdirAll(dir, 0o755); err != nil {
 				return fmt.Errorf("failed to create parent directories: %w", err)
 			}
 		}
@@ -355,7 +356,7 @@ func (r *sandboxFs) WriteFile(path string, data []byte) error {
 		// if the operation is interrupted, as the rename operation is atomic on Linux.
 		tmpRelPath := fmt.Sprintf("%s.%d.tmp", relPath, time.Now().UnixNano())
 
-		if err := root.WriteFile(tmpRelPath, data, 0644); err != nil {
+		if err := root.WriteFile(tmpRelPath, data, 0o644); err != nil {
 			root.Remove(tmpRelPath) // Ensure cleanup of partial/empty temp file
 			return fmt.Errorf("failed to write to temp file: %w", err)
 		}

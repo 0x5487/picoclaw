@@ -158,8 +158,13 @@ func TestEditTool_EditFile_OutsideAllowedDir(t *testing.T) {
 	// Should mention outside allowed directory
 	// Note: ErrorResult only sets ForLLM by default, so ForUser might be empty.
 	// We check ForLLM as it's the primary error channel.
-	assert.True(t, strings.Contains(result.ForLLM, "outside") || strings.Contains(result.ForLLM, "access denied") || strings.Contains(result.ForLLM, "escapes"),
-		"Expected 'outside allowed' or 'access denied' message, got ForLLM: %s", result.ForLLM)
+	assert.True(
+		t,
+		strings.Contains(result.ForLLM, "outside") || strings.Contains(result.ForLLM, "access denied") ||
+			strings.Contains(result.ForLLM, "escapes"),
+		"Expected 'outside allowed' or 'access denied' message, got ForLLM: %s",
+		result.ForLLM,
+	)
 }
 
 // TestEditTool_EditFile_MissingPath verifies error handling for missing path
@@ -346,13 +351,18 @@ func TestAppendFileTool_AppendToNonExistent_Restricted(t *testing.T) {
 	tool := NewAppendFileTool(workspace, true)
 	ctx := context.Background()
 
-	args := map[string]interface{}{
+	args := map[string]any{
 		"path":    "brand_new_file.txt",
 		"content": "first content",
 	}
 
 	result := tool.Execute(ctx, args)
-	assert.False(t, result.IsError, "Expected success when appending to non-existent file in restricted mode, got: %s", result.ForLLM)
+	assert.False(
+		t,
+		result.IsError,
+		"Expected success when appending to non-existent file in restricted mode, got: %s",
+		result.ForLLM,
+	)
 
 	// Verify the file was created with correct content
 	data, err := os.ReadFile(filepath.Join(workspace, "brand_new_file.txt"))
@@ -365,12 +375,12 @@ func TestAppendFileTool_AppendToNonExistent_Restricted(t *testing.T) {
 func TestAppendFileTool_Restricted_Success(t *testing.T) {
 	workspace := t.TempDir()
 	testFile := "existing.txt"
-	err := os.WriteFile(filepath.Join(workspace, testFile), []byte("initial"), 0644)
+	err := os.WriteFile(filepath.Join(workspace, testFile), []byte("initial"), 0o644)
 	assert.NoError(t, err)
 
 	tool := NewAppendFileTool(workspace, true)
 	ctx := context.Background()
-	args := map[string]interface{}{
+	args := map[string]any{
 		"path":    testFile,
 		"content": " appended",
 	}
@@ -389,12 +399,12 @@ func TestAppendFileTool_Restricted_Success(t *testing.T) {
 func TestEditFileTool_Restricted_InPlaceEdit(t *testing.T) {
 	workspace := t.TempDir()
 	testFile := "edit_target.txt"
-	err := os.WriteFile(filepath.Join(workspace, testFile), []byte("Hello World"), 0644)
+	err := os.WriteFile(filepath.Join(workspace, testFile), []byte("Hello World"), 0o644)
 	assert.NoError(t, err)
 
 	tool := NewEditFileTool(workspace, true)
 	ctx := context.Background()
-	args := map[string]interface{}{
+	args := map[string]any{
 		"path":     testFile,
 		"old_text": "World",
 		"new_text": "Go",
@@ -415,7 +425,7 @@ func TestEditFileTool_Restricted_FileNotFound(t *testing.T) {
 	workspace := t.TempDir()
 	tool := NewEditFileTool(workspace, true)
 	ctx := context.Background()
-	args := map[string]interface{}{
+	args := map[string]any{
 		"path":     "no_such_file.txt",
 		"old_text": "old",
 		"new_text": "new",

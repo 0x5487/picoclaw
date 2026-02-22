@@ -281,7 +281,8 @@ func TestFilesystemTool_ReadFile_RejectsSymlinkEscape(t *testing.T) {
 	// os.Root might return different errors depending on platform/implementation
 	// but it definitely should error.
 	// Our wrapper returns "access denied or file not found"
-	if !strings.Contains(result.ForLLM, "access denied") && !strings.Contains(result.ForLLM, "file not found") && !strings.Contains(result.ForLLM, "no such file") {
+	if !strings.Contains(result.ForLLM, "access denied") && !strings.Contains(result.ForLLM, "file not found") &&
+		!strings.Contains(result.ForLLM, "no such file") {
 		t.Fatalf("expected symlink escape error, got: %s", result.ForLLM)
 	}
 }
@@ -292,7 +293,7 @@ func TestFilesystemTool_EmptyWorkspace_AccessDenied(t *testing.T) {
 	// Try to read a sensitive file (simulated by a temp file outside workspace)
 	tmpDir := t.TempDir()
 	secretFile := filepath.Join(tmpDir, "shadow")
-	os.WriteFile(secretFile, []byte("secret data"), 0600)
+	os.WriteFile(secretFile, []byte("secret data"), 0o600)
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"path": secretFile,
@@ -316,25 +317,25 @@ func TestRootMkdirAll(t *testing.T) {
 	defer root.Close()
 
 	// Case 1: Single directory
-	err = root.MkdirAll("dir1", 0755)
+	err = root.MkdirAll("dir1", 0o755)
 	assert.NoError(t, err)
 	_, err = os.Stat(filepath.Join(workspace, "dir1"))
 	assert.NoError(t, err)
 
 	// Case 2: Deeply nested directory
-	err = root.MkdirAll("a/b/c/d", 0755)
+	err = root.MkdirAll("a/b/c/d", 0o755)
 	assert.NoError(t, err)
 	_, err = os.Stat(filepath.Join(workspace, "a/b/c/d"))
 	assert.NoError(t, err)
 
 	// Case 3: Already exists — must be idempotent
-	err = root.MkdirAll("a/b/c/d", 0755)
+	err = root.MkdirAll("a/b/c/d", 0o755)
 	assert.NoError(t, err)
 
 	// Case 4: A regular file blocks directory creation — must error
-	err = os.WriteFile(filepath.Join(workspace, "file_exists"), []byte("data"), 0644)
+	err = os.WriteFile(filepath.Join(workspace, "file_exists"), []byte("data"), 0o644)
 	assert.NoError(t, err)
-	err = root.MkdirAll("file_exists", 0755)
+	err = root.MkdirAll("file_exists", 0o755)
 	assert.Error(t, err, "expected error when a file exists at the directory path")
 }
 
@@ -367,9 +368,9 @@ func TestHostRW_Read_PermissionDenied(t *testing.T) {
 	}
 	tmpDir := t.TempDir()
 	protected := filepath.Join(tmpDir, "protected.txt")
-	err := os.WriteFile(protected, []byte("secret"), 0000)
+	err := os.WriteFile(protected, []byte("secret"), 0o000)
 	assert.NoError(t, err)
-	defer os.Chmod(protected, 0644) // ensure cleanup
+	defer os.Chmod(protected, 0o644) // ensure cleanup
 
 	_, err = (&hostFs{}).ReadFile(protected)
 	assert.Error(t, err)
@@ -392,7 +393,7 @@ func TestRootRW_Read_Directory(t *testing.T) {
 	defer root.Close()
 
 	// Create a subdirectory
-	err = root.Mkdir("subdir", 0755)
+	err = root.Mkdir("subdir", 0o755)
 	assert.NoError(t, err)
 
 	_, err = (&sandboxFs{workspace: workspace}).ReadFile("subdir")

@@ -133,7 +133,7 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 	var rw fileReadWriter
 	if t.restrict {
 		return executeInWorkspace(t.workspace, path, func(root *os.Root, relPath string) (*ToolResult, error) {
-			if err := appendFileWithRW(&sandboxFs{root: root}, relPath, content); err != nil {
+			if err := appendFile(&sandboxFs{root: root}, relPath, content); err != nil {
 				return nil, err
 			}
 			return SilentResult(fmt.Sprintf("Appended to %s", path)), nil
@@ -141,7 +141,7 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 	}
 
 	rw = &hostFs{}
-	if err := appendFileWithRW(rw, path, content); err != nil {
+	if err := appendFile(rw, path, content); err != nil {
 		return ErrorResult(err.Error())
 	}
 	return SilentResult(fmt.Sprintf("Appended to %s", path))
@@ -163,8 +163,8 @@ func editFile(rw fileReadWriter, path, oldText, newText string) error {
 	return rw.Write(path, newContent)
 }
 
-// appendFileWithRW reads the existing content (if any) via rw, appends new content, and writes back.
-func appendFileWithRW(rw fileReadWriter, path, appendContent string) error {
+// appendFile reads the existing content (if any) via rw, appends new content, and writes back.
+func appendFile(rw fileReadWriter, path, appendContent string) error {
 	content, err := rw.Read(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err

@@ -59,29 +59,41 @@ func NewAgentInstance(
 
 	restrict := defaults.RestrictToWorkspace
 	sb := sandbox.NewFromConfigWithAgent(workspace, restrict, cfg, agentID)
-	readSb := sb
-	if !sandbox.IsToolSandboxEnabled(cfg, "read_file") {
-		readSb = nil
-	}
-	writeSb := sb
-	if !sandbox.IsToolSandboxEnabled(cfg, "write_file") {
-		writeSb = nil
-	}
-	execSb := sb
-	if !sandbox.IsToolSandboxEnabled(cfg, "exec") {
-		execSb = nil
+	isSandboxOff := true
+	if cfg != nil {
+		mode := strings.ToLower(strings.TrimSpace(cfg.Agents.Defaults.Sandbox.Mode))
+		if mode == "all" || mode == "non-main" {
+			isSandboxOff = false
+		}
 	}
 	roContainer := isContainerReadOnlySandbox(cfg)
+
 	toolsRegistry := tools.NewToolRegistry()
-	toolsRegistry.Register(tools.NewReadFileToolWithSandbox(workspace, restrict, readSb))
-	if !roContainer {
-		toolsRegistry.Register(tools.NewWriteFileToolWithSandbox(workspace, restrict, writeSb))
+
+	// Helper to check if tool is allowed (either sandbox is off or policy allows it)
+	isAllowed := func(toolName string) bool {
+		return isSandboxOff || sandbox.IsToolSandboxEnabled(cfg, toolName)
 	}
-	toolsRegistry.Register(tools.NewListDirTool(workspace, restrict))
-	toolsRegistry.Register(tools.NewExecToolWithSandbox(workspace, restrict, cfg, execSb))
+
+	if isAllowed("read_file") {
+		toolsRegistry.Register(tools.NewReadFileToolWithSandbox(workspace, restrict, sb))
+	}
+	if !roContainer && isAllowed("write_file") {
+		toolsRegistry.Register(tools.NewWriteFileToolWithSandbox(workspace, restrict, sb))
+	}
+	if isAllowed("list_dir") {
+		toolsRegistry.Register(tools.NewListDirTool(workspace, restrict))
+	}
+	if isAllowed("exec") {
+		toolsRegistry.Register(tools.NewExecToolWithSandbox(workspace, restrict, cfg, sb))
+	}
 	if !roContainer {
-		toolsRegistry.Register(tools.NewEditFileTool(workspace, restrict))
-		toolsRegistry.Register(tools.NewAppendFileTool(workspace, restrict))
+		if isAllowed("edit_file") {
+			toolsRegistry.Register(tools.NewEditFileTool(workspace, restrict))
+		}
+		if isAllowed("append_file") {
+			toolsRegistry.Register(tools.NewAppendFileTool(workspace, restrict))
+		}
 	}
 
 	sessionsDir := filepath.Join(workspace, "sessions")

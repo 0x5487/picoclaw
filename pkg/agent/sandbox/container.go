@@ -73,7 +73,7 @@ func NewContainerSandbox(cfg ContainerSandboxConfig) *ContainerSandbox {
 		cfg.Image = "openclaw-sandbox:bookworm-slim"
 	}
 	if strings.TrimSpace(cfg.ContainerPrefix) == "" {
-		cfg.ContainerPrefix = "picoclaw-sandbox-"
+		cfg.ContainerPrefix = "picoclaw-sbx-"
 	}
 	if strings.TrimSpace(cfg.ContainerName) == "" {
 		cfg.ContainerName = cfg.ContainerPrefix + "default"
@@ -375,7 +375,7 @@ func (c *ContainerSandbox) registryPath() string {
 }
 
 func (c *ContainerSandbox) sandboxStateDir() string {
-	return filepath.Join(resolvePicoClawHomeDir(), "state", "sandbox")
+	return filepath.Join(resolvePicoClawHomeDir(), "sandbox")
 }
 
 func resolvePicoClawHomeDir() string {

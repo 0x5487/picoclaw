@@ -269,7 +269,7 @@ func (m *scopedSandboxManager) pruneOnce(ctx context.Context) error {
 		return nil
 	}
 
-	regPath := filepath.Join(resolvePicoClawHomeDir(), "state", "sandbox", defaultSandboxRegistryFile)
+	regPath := filepath.Join(resolvePicoClawHomeDir(), "sandbox", defaultSandboxRegistryFile)
 	registryMu.Lock()
 	data, err := loadRegistry(regPath)
 	registryMu.Unlock()

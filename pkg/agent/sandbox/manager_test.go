@@ -90,7 +90,7 @@ func TestScopedSandboxManager_PruneLoopLifecycle(t *testing.T) {
 func TestScopedSandboxManager_PruneOnceLoadRegistryError(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	stateDir := filepath.Join(home, ".picoclaw", "state", "sandbox")
+	stateDir := filepath.Join(home, ".picoclaw", "sandbox")
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		t.Fatalf("mkdir state dir: %v", err)
 	}

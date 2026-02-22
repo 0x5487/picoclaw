@@ -82,12 +82,17 @@ func isWithinWorkspace(candidate, workspace string) bool {
 }
 
 type ReadFileTool struct {
-	workspace string
-	restrict  bool
+	fs fileSystem
 }
 
 func NewReadFileTool(workspace string, restrict bool) *ReadFileTool {
-	return &ReadFileTool{workspace: workspace, restrict: restrict}
+	var fs fileSystem
+	if restrict {
+		fs = &sandboxFs{workspace: workspace}
+	} else {
+		fs = &hostFs{}
+	}
+	return &ReadFileTool{fs: fs}
 }
 
 func (t *ReadFileTool) Name() string {
@@ -117,17 +122,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("path is required")
 	}
 
-	if t.restrict {
-		return executeInWorkspace(t.workspace, path, func(root *os.Root, relPath string) (*ToolResult, error) {
-			content, err := (&sandboxFs{root: root}).Read(relPath)
-			if err != nil {
-				return nil, err
-			}
-			return NewToolResult(string(content)), nil
-		})
-	}
-
-	content, err := (&hostFs{}).Read(path)
+	content, err := t.fs.ReadFile(path)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
@@ -135,12 +130,17 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 }
 
 type WriteFileTool struct {
-	workspace string
-	restrict  bool
+	fs fileSystem
 }
 
 func NewWriteFileTool(workspace string, restrict bool) *WriteFileTool {
-	return &WriteFileTool{workspace: workspace, restrict: restrict}
+	var fs fileSystem
+	if restrict {
+		fs = &sandboxFs{workspace: workspace}
+	} else {
+		fs = &hostFs{}
+	}
+	return &WriteFileTool{fs: fs}
 }
 
 func (t *WriteFileTool) Name() string {
@@ -179,16 +179,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		return ErrorResult("content is required")
 	}
 
-	if t.restrict {
-		return executeInWorkspace(t.workspace, path, func(root *os.Root, relPath string) (*ToolResult, error) {
-			if err := (&sandboxFs{root: root}).Write(relPath, []byte(content)); err != nil {
-				return nil, err
-			}
-			return SilentResult(fmt.Sprintf("File written: %s", path)), nil
-		})
-	}
-
-	if err := (&hostFs{}).Write(path, []byte(content)); err != nil {
+	if err := t.fs.WriteFile(path, []byte(content)); err != nil {
 		return ErrorResult(err.Error())
 	}
 
@@ -196,12 +187,17 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 }
 
 type ListDirTool struct {
-	workspace string
-	restrict  bool
+	fs fileSystem
 }
 
 func NewListDirTool(workspace string, restrict bool) *ListDirTool {
-	return &ListDirTool{workspace: workspace, restrict: restrict}
+	var fs fileSystem
+	if restrict {
+		fs = &sandboxFs{workspace: workspace}
+	} else {
+		fs = &hostFs{}
+	}
+	return &ListDirTool{fs: fs}
 }
 
 func (t *ListDirTool) Name() string {
@@ -231,22 +227,11 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		path = "."
 	}
 
-	if !t.restrict {
-		entries, err := os.ReadDir(path)
-		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to read directory: %v", err))
-		}
-		return formatDirEntries(entries)
+	entries, err := t.fs.ReadDir(path)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to read directory: %v", err))
 	}
-
-	return executeInWorkspace(t.workspace, path, func(root *os.Root, relPath string) (*ToolResult, error) {
-		entries, err := fs.ReadDir(root.FS(), relPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read directory: %w", err)
-		}
-
-		return formatDirEntries(entries), nil
-	})
+	return formatDirEntries(entries)
 }
 
 func formatDirEntries(entries []os.DirEntry) *ToolResult {
@@ -261,17 +246,18 @@ func formatDirEntries(entries []os.DirEntry) *ToolResult {
 	return NewToolResult(result.String())
 }
 
-// fileReadWriter abstracts reading and writing files, allowing both unrestricted
-// (host filesystem) and sandbox (os.Root) implementations to share the same logic.
-type fileReadWriter interface {
-	Read(path string) ([]byte, error)
-	Write(path string, data []byte) error
+// fileSystem abstracts reading, writing, and listing files, allowing both
+// unrestricted (host filesystem) and sandbox (os.Root) implementations to share the same polymorphic interface.
+type fileSystem interface {
+	ReadFile(path string) ([]byte, error)
+	WriteFile(path string, data []byte) error
+	ReadDir(path string) ([]os.DirEntry, error)
 }
 
 // hostFs is an unrestricted fileReadWriter that operates directly on the host filesystem.
 type hostFs struct{}
 
-func (h *hostFs) Read(path string) ([]byte, error) {
+func (h *hostFs) ReadFile(path string) ([]byte, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -285,7 +271,11 @@ func (h *hostFs) Read(path string) ([]byte, error) {
 	return content, nil
 }
 
-func (h *hostFs) Write(path string, data []byte) error {
+func (h *hostFs) ReadDir(path string) ([]os.DirEntry, error) {
+	return os.ReadDir(path)
+}
+
+func (h *hostFs) WriteFile(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create parent directories: %w", err)
@@ -307,50 +297,88 @@ func (h *hostFs) Write(path string, data []byte) error {
 	return nil
 }
 
-// sandboxFs is a sandboxed fileReadWriter that operates within an os.Root boundary.
-// All paths passed to Read/Write must be relative to the root.
+// sandboxFs is a sandboxed fileSystem that operates within a strictly defined workspace using os.Root.
 type sandboxFs struct {
-	root *os.Root
+	workspace string
 }
 
-func (r *sandboxFs) Read(path string) ([]byte, error) {
-	content, err := r.root.ReadFile(path)
+func (r *sandboxFs) execute(path string, fn func(root *os.Root, relPath string) error) error {
+	if r.workspace == "" {
+		return fmt.Errorf("workspace is not defined")
+	}
+
+	root, err := os.OpenRoot(r.workspace)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("failed to read file: file not found: %w", err)
-		}
-		// os.Root returns "escapes from parent" for paths outside the root
-		if os.IsPermission(err) || strings.Contains(err.Error(), "escapes from parent") || strings.Contains(err.Error(), "permission denied") {
-			return nil, fmt.Errorf("failed to read file: access denied: %w", err)
-		}
-		return nil, fmt.Errorf("failed to read file: %w", err)
+		return fmt.Errorf("failed to open workspace: %w", err)
 	}
-	return content, nil
+	defer root.Close()
+
+	relPath, err := getSafeRelPath(r.workspace, path)
+	if err != nil {
+		return err
+	}
+
+	return fn(root, relPath)
 }
 
-func (r *sandboxFs) Write(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if dir != "." && dir != "/" {
-		if err := r.root.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("failed to create parent directories: %w", err)
+func (r *sandboxFs) ReadFile(path string) ([]byte, error) {
+	var content []byte
+	err := r.execute(path, func(root *os.Root, relPath string) error {
+		fileContent, err := root.ReadFile(relPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("failed to read file: file not found: %w", err)
+			}
+			// os.Root returns "escapes from parent" for paths outside the root
+			if os.IsPermission(err) || strings.Contains(err.Error(), "escapes from parent") || strings.Contains(err.Error(), "permission denied") {
+				return fmt.Errorf("failed to read file: access denied: %w", err)
+			}
+			return fmt.Errorf("failed to read file: %w", err)
 		}
-	}
+		content = fileContent
+		return nil
+	})
+	return content, err
+}
 
-	// We use a "write-then-rename" pattern here to ensure an atomic write.
-	// This prevents the target file from being left in a truncated or partial state
-	// if the operation is interrupted, as the rename operation is atomic on Linux.
-	tmpRelPath := fmt.Sprintf("%s.%d.tmp", path, time.Now().UnixNano())
+func (r *sandboxFs) WriteFile(path string, data []byte) error {
+	return r.execute(path, func(root *os.Root, relPath string) error {
+		dir := filepath.Dir(relPath)
+		if dir != "." && dir != "/" {
+			if err := root.MkdirAll(dir, 0755); err != nil {
+				return fmt.Errorf("failed to create parent directories: %w", err)
+			}
+		}
 
-	if err := r.root.WriteFile(tmpRelPath, data, 0644); err != nil {
-		r.root.Remove(tmpRelPath) // Ensure cleanup of partial/empty temp file
-		return fmt.Errorf("failed to write to temp file: %w", err)
-	}
+		// We use a "write-then-rename" pattern here to ensure an atomic write.
+		// This prevents the target file from being left in a truncated or partial state
+		// if the operation is interrupted, as the rename operation is atomic on Linux.
+		tmpRelPath := fmt.Sprintf("%s.%d.tmp", relPath, time.Now().UnixNano())
 
-	if err := r.root.Rename(tmpRelPath, path); err != nil {
-		r.root.Remove(tmpRelPath)
-		return fmt.Errorf("failed to rename temp file over target: %w", err)
-	}
-	return nil
+		if err := root.WriteFile(tmpRelPath, data, 0644); err != nil {
+			root.Remove(tmpRelPath) // Ensure cleanup of partial/empty temp file
+			return fmt.Errorf("failed to write to temp file: %w", err)
+		}
+
+		if err := root.Rename(tmpRelPath, relPath); err != nil {
+			root.Remove(tmpRelPath)
+			return fmt.Errorf("failed to rename temp file over target: %w", err)
+		}
+		return nil
+	})
+}
+
+func (r *sandboxFs) ReadDir(path string) ([]os.DirEntry, error) {
+	var entries []os.DirEntry
+	err := r.execute(path, func(root *os.Root, relPath string) error {
+		dirEntries, err := fs.ReadDir(root.FS(), relPath)
+		if err != nil {
+			return err
+		}
+		entries = dirEntries
+		return nil
+	})
+	return entries, err
 }
 
 // Helper to get a safe relative path for os.Root usage
@@ -373,32 +401,4 @@ func getSafeRelPath(workspace, path string) (string, error) {
 	}
 
 	return rel, nil
-}
-
-// executeInWorkspace executes a function within the safety of os.Root
-func executeInWorkspace(workspace string, path string, fn func(root *os.Root, relPath string) (*ToolResult, error)) *ToolResult {
-	if workspace == "" {
-		return ErrorResult("workspace is not defined")
-	}
-
-	// 1. Open the Root
-	root, err := os.OpenRoot(workspace)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to open workspace: %v", err))
-	}
-	defer root.Close()
-
-	// 2. Calculate relative path
-	relPath, err := getSafeRelPath(workspace, path)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-
-	// 3. Execute the operation
-	result, err := fn(root, relPath)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-
-	return result
 }

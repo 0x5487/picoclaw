@@ -5,23 +5,24 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"strings"
 )
 
 // EditFileTool edits a file by replacing old_text with new_text.
 // The old_text must exist exactly in the file.
 type EditFileTool struct {
-	allowedDir string
-	restrict   bool
+	fs fileSystem
 }
 
 // NewEditFileTool creates a new EditFileTool with optional directory restriction.
-func NewEditFileTool(allowedDir string, restrict bool) *EditFileTool {
-	return &EditFileTool{
-		allowedDir: allowedDir,
-		restrict:   restrict,
+func NewEditFileTool(workspace string, restrict bool) *EditFileTool {
+	var fs fileSystem
+	if restrict {
+		fs = &sandboxFs{workspace: workspace}
+	} else {
+		fs = &hostFs{}
 	}
+	return &EditFileTool{fs: fs}
 }
 
 func (t *EditFileTool) Name() string {
@@ -69,29 +70,24 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("new_text is required")
 	}
 
-	if t.restrict {
-		return executeInWorkspace(t.allowedDir, path, func(root *os.Root, relPath string) (*ToolResult, error) {
-			rw := &sandboxFs{root: root}
-			if err := editFile(rw, relPath, oldText, newText); err != nil {
-				return nil, err
-			}
-			return SilentResult(fmt.Sprintf("File edited: %s", path)), nil
-		})
-	}
-
-	if err := editFile(&hostFs{}, path, oldText, newText); err != nil {
+	if err := editFile(t.fs, path, oldText, newText); err != nil {
 		return ErrorResult(err.Error())
 	}
 	return SilentResult(fmt.Sprintf("File edited: %s", path))
 }
 
 type AppendFileTool struct {
-	workspace string
-	restrict  bool
+	fs fileSystem
 }
 
 func NewAppendFileTool(workspace string, restrict bool) *AppendFileTool {
-	return &AppendFileTool{workspace: workspace, restrict: restrict}
+	var fs fileSystem
+	if restrict {
+		fs = &sandboxFs{workspace: workspace}
+	} else {
+		fs = &hostFs{}
+	}
+	return &AppendFileTool{fs: fs}
 }
 
 func (t *AppendFileTool) Name() string {
@@ -130,27 +126,16 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult("content is required")
 	}
 
-	var rw fileReadWriter
-	if t.restrict {
-		return executeInWorkspace(t.workspace, path, func(root *os.Root, relPath string) (*ToolResult, error) {
-			if err := appendFile(&sandboxFs{root: root}, relPath, content); err != nil {
-				return nil, err
-			}
-			return SilentResult(fmt.Sprintf("Appended to %s", path)), nil
-		})
-	}
-
-	rw = &hostFs{}
-	if err := appendFile(rw, path, content); err != nil {
+	if err := appendFile(t.fs, path, content); err != nil {
 		return ErrorResult(err.Error())
 	}
 	return SilentResult(fmt.Sprintf("Appended to %s", path))
 }
 
-// editFile reads the file via rw, performs the replacement, and writes back.
-// It uses a fileReadWriter, allowing the same logic for both restricted and unrestricted modes.
-func editFile(rw fileReadWriter, path, oldText, newText string) error {
-	content, err := rw.Read(path)
+// editFile reads the file via sysFs, performs the replacement, and writes back.
+// It uses a fileSystem interface, allowing the same logic for both restricted and unrestricted modes.
+func editFile(sysFs fileSystem, path, oldText, newText string) error {
+	content, err := sysFs.ReadFile(path)
 	if err != nil {
 		return err
 	}
@@ -160,18 +145,18 @@ func editFile(rw fileReadWriter, path, oldText, newText string) error {
 		return err
 	}
 
-	return rw.Write(path, newContent)
+	return sysFs.WriteFile(path, newContent)
 }
 
-// appendFile reads the existing content (if any) via rw, appends new content, and writes back.
-func appendFile(rw fileReadWriter, path, appendContent string) error {
-	content, err := rw.Read(path)
+// appendFile reads the existing content (if any) via sysFs, appends new content, and writes back.
+func appendFile(sysFs fileSystem, path, appendContent string) error {
+	content, err := sysFs.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 
 	newContent := append(content, []byte(appendContent)...)
-	return rw.Write(path, newContent)
+	return sysFs.WriteFile(path, newContent)
 }
 
 // replaceEditContent handles the core logic of finding and replacing a single occurrence of oldText.

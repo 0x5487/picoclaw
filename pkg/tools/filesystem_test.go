@@ -17,7 +17,7 @@ func TestFilesystemTool_ReadFile_Success(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "test.txt")
 	os.WriteFile(testFile, []byte("test content"), 0o644)
 
-	tool := &ReadFileTool{}
+	tool := NewReadFileTool("", false)
 	ctx := context.Background()
 	args := map[string]any{
 		"path": testFile,
@@ -44,7 +44,7 @@ func TestFilesystemTool_ReadFile_Success(t *testing.T) {
 
 // TestFilesystemTool_ReadFile_NotFound verifies error handling for missing file
 func TestFilesystemTool_ReadFile_NotFound(t *testing.T) {
-	tool := &ReadFileTool{}
+	tool := NewReadFileTool("", false)
 	ctx := context.Background()
 	args := map[string]any{
 		"path": "/nonexistent_file_12345.txt",
@@ -87,7 +87,7 @@ func TestFilesystemTool_WriteFile_Success(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "newfile.txt")
 
-	tool := &WriteFileTool{}
+	tool := NewWriteFileTool("", false)
 	ctx := context.Background()
 	args := map[string]any{
 		"path":    testFile,
@@ -126,7 +126,7 @@ func TestFilesystemTool_WriteFile_CreateDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "subdir", "newfile.txt")
 
-	tool := &WriteFileTool{}
+	tool := NewWriteFileTool("", false)
 	ctx := context.Background()
 	args := map[string]any{
 		"path":    testFile,
@@ -152,7 +152,7 @@ func TestFilesystemTool_WriteFile_CreateDir(t *testing.T) {
 
 // TestFilesystemTool_WriteFile_MissingPath verifies error handling for missing path
 func TestFilesystemTool_WriteFile_MissingPath(t *testing.T) {
-	tool := &WriteFileTool{}
+	tool := NewWriteFileTool("", false)
 	ctx := context.Background()
 	args := map[string]any{
 		"content": "test",
@@ -168,7 +168,7 @@ func TestFilesystemTool_WriteFile_MissingPath(t *testing.T) {
 
 // TestFilesystemTool_WriteFile_MissingContent verifies error handling for missing content
 func TestFilesystemTool_WriteFile_MissingContent(t *testing.T) {
-	tool := &WriteFileTool{}
+	tool := NewWriteFileTool("", false)
 	ctx := context.Background()
 	args := map[string]any{
 		"path": "/tmp/test.txt",
@@ -195,7 +195,7 @@ func TestFilesystemTool_ListDir_Success(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir, "file2.txt"), []byte("content"), 0o644)
 	os.Mkdir(filepath.Join(tmpDir, "subdir"), 0o755)
 
-	tool := &ListDirTool{}
+	tool := NewListDirTool("", false)
 	ctx := context.Background()
 	args := map[string]any{
 		"path": tmpDir,
@@ -219,7 +219,7 @@ func TestFilesystemTool_ListDir_Success(t *testing.T) {
 
 // TestFilesystemTool_ListDir_NotFound verifies error handling for non-existent directory
 func TestFilesystemTool_ListDir_NotFound(t *testing.T) {
-	tool := &ListDirTool{}
+	tool := NewListDirTool("", false)
 	ctx := context.Background()
 	args := map[string]any{
 		"path": "/nonexistent_directory_12345",
@@ -240,7 +240,7 @@ func TestFilesystemTool_ListDir_NotFound(t *testing.T) {
 
 // TestFilesystemTool_ListDir_DefaultPath verifies default to current directory
 func TestFilesystemTool_ListDir_DefaultPath(t *testing.T) {
-	tool := &ListDirTool{}
+	tool := NewListDirTool("", false)
 	ctx := context.Background()
 	args := map[string]any{}
 
@@ -371,7 +371,7 @@ func TestHostRW_Read_PermissionDenied(t *testing.T) {
 	assert.NoError(t, err)
 	defer os.Chmod(protected, 0644) // ensure cleanup
 
-	_, err = (&hostFs{}).Read(protected)
+	_, err = (&hostFs{}).ReadFile(protected)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "access denied")
 }
@@ -380,7 +380,7 @@ func TestHostRW_Read_PermissionDenied(t *testing.T) {
 func TestHostRW_Read_Directory(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	_, err := (&hostFs{}).Read(tmpDir)
+	_, err := (&hostFs{}).ReadFile(tmpDir)
 	assert.Error(t, err, "expected error when reading a directory as a file")
 }
 
@@ -395,7 +395,7 @@ func TestRootRW_Read_Directory(t *testing.T) {
 	err = root.Mkdir("subdir", 0755)
 	assert.NoError(t, err)
 
-	_, err = (&sandboxFs{root: root}).Read("subdir")
+	_, err = (&sandboxFs{workspace: workspace}).ReadFile("subdir")
 	assert.Error(t, err, "expected error when reading a directory as a file")
 }
 
@@ -404,7 +404,7 @@ func TestHostRW_Write_ParentDirMissing(t *testing.T) {
 	tmpDir := t.TempDir()
 	target := filepath.Join(tmpDir, "a", "b", "c", "file.txt")
 
-	err := (&hostFs{}).Write(target, []byte("hello"))
+	err := (&hostFs{}).WriteFile(target, []byte("hello"))
 	assert.NoError(t, err)
 
 	data, err := os.ReadFile(target)
@@ -416,12 +416,9 @@ func TestHostRW_Write_ParentDirMissing(t *testing.T) {
 // nested parent directories automatically within the sandbox.
 func TestRootRW_Write_ParentDirMissing(t *testing.T) {
 	workspace := t.TempDir()
-	root, err := os.OpenRoot(workspace)
-	assert.NoError(t, err)
-	defer root.Close()
 
 	relPath := "x/y/z/file.txt"
-	err = (&sandboxFs{root: root}).Write(relPath, []byte("nested"))
+	err := (&sandboxFs{workspace: workspace}).WriteFile(relPath, []byte("nested"))
 	assert.NoError(t, err)
 
 	data, err := os.ReadFile(filepath.Join(workspace, relPath))
@@ -435,7 +432,7 @@ func TestHostRW_Write(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "atomic_test.txt")
 	testData := []byte("atomic test content")
 
-	err := (&hostFs{}).Write(testFile, testData)
+	err := (&hostFs{}).WriteFile(testFile, testData)
 	assert.NoError(t, err)
 
 	content, err := os.ReadFile(testFile)
@@ -444,7 +441,7 @@ func TestHostRW_Write(t *testing.T) {
 
 	// Verify it overwrites correctly
 	newData := []byte("new atomic content")
-	err = (&hostFs{}).Write(testFile, newData)
+	err = (&hostFs{}).WriteFile(testFile, newData)
 	assert.NoError(t, err)
 
 	content, err = os.ReadFile(testFile)
@@ -455,33 +452,36 @@ func TestHostRW_Write(t *testing.T) {
 // TestRootRW_Write verifies the rootRW.Write helper function
 func TestRootRW_Write(t *testing.T) {
 	tmpDir := t.TempDir()
-	root, err := os.OpenRoot(tmpDir)
-	assert.NoError(t, err)
-	defer root.Close()
 
 	relPath := "atomic_root_test.txt"
 	testData := []byte("atomic root test content")
 
-	erw := &sandboxFs{root: root}
-	err = erw.Write(relPath, testData)
+	erw := &sandboxFs{workspace: tmpDir}
+	err := erw.WriteFile(relPath, testData)
 	assert.NoError(t, err)
+
+	root, err := os.OpenRoot(tmpDir)
+	assert.NoError(t, err)
+	defer root.Close()
 
 	f, err := root.Open(relPath)
 	assert.NoError(t, err)
+	defer f.Close()
+
 	content, err := io.ReadAll(f)
 	assert.NoError(t, err)
-	f.Close()
 	assert.Equal(t, testData, content)
 
 	// Verify it overwrites correctly
 	newData := []byte("new root atomic content")
-	err = erw.Write(relPath, newData)
+	err = erw.WriteFile(relPath, newData)
 	assert.NoError(t, err)
 
-	f, err = root.Open(relPath)
+	f2, err := root.Open(relPath)
 	assert.NoError(t, err)
-	content, err = io.ReadAll(f)
+	defer f2.Close()
+
+	content, err = io.ReadAll(f2)
 	assert.NoError(t, err)
-	f.Close()
 	assert.Equal(t, newData, content)
 }

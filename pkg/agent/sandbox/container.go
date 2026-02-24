@@ -73,7 +73,7 @@ const defaultSandboxRegistryFile = "containers.json"
 // NewContainerSandbox creates a container sandbox with normalized defaults and precomputed config hash.
 func NewContainerSandbox(cfg ContainerSandboxConfig) *ContainerSandbox {
 	if strings.TrimSpace(cfg.Image) == "" {
-		cfg.Image = "debian:bookworm-slim"
+		cfg.Image = "picoclaw-sandbox:bookworm-slim"
 	}
 	if strings.TrimSpace(cfg.ContainerPrefix) == "" {
 		cfg.ContainerPrefix = "picoclaw-sandbox-"
@@ -204,7 +204,7 @@ func (c *ContainerSandbox) ExecStream(
 	execCtx := ctx
 	cancel := func() {}
 	if req.TimeoutMs > 0 {
-		execCtx, cancel = context.WithTimeout(ctx, durationMs(req.TimeoutMs))
+		execCtx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutMs)*time.Millisecond)
 	} else if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		execCtx, cancel = context.WithTimeout(ctx, 30*time.Second)
 	}
@@ -334,6 +334,7 @@ func (c *ContainerSandbox) createAndStart(ctx context.Context) error {
 	cfg := &container.Config{
 		Image:      c.cfg.Image,
 		Cmd:        []string{"sleep", "infinity"},
+		Entrypoint: []string{},
 		WorkingDir: c.cfg.Workdir,
 		User:       strings.TrimSpace(c.cfg.User),
 		Env:        c.containerEnv(),
@@ -396,7 +397,7 @@ func (c *ContainerSandbox) registryPath() string {
 }
 
 func (c *ContainerSandbox) sandboxStateDir() string {
-	return filepath.Join(resolvePicoClawHomeDir(), "sandbox")
+	return filepath.Join(resolvePicoClawHomeDir(), "sandboxes")
 }
 
 func resolvePicoClawHomeDir() string {
@@ -890,6 +891,8 @@ func computeContainerConfigHash(cfg ContainerSandboxConfig) string {
 		DNS             []string     `json:"dns"`
 		ExtraHosts      []string     `json:"extra_hosts"`
 		Binds           []string     `json:"binds"`
+		Cmd             []string     `json:"cmd"`
+		Entrypoint      []string     `json:"entrypoint"`
 	}{
 		Image:           strings.TrimSpace(cfg.Image),
 		ContainerPrefix: strings.TrimSpace(cfg.ContainerPrefix),
@@ -915,6 +918,8 @@ func computeContainerConfigHash(cfg ContainerSandboxConfig) string {
 		DNS:             cfg.DNS,
 		ExtraHosts:      cfg.ExtraHosts,
 		Binds:           cfg.Binds,
+		Cmd:             []string{"sleep", "infinity"},
+		Entrypoint:      []string{},
 	}
 	raw, _ := json.Marshal(payload)
 	return computeConfigHash(string(raw))

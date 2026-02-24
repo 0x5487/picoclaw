@@ -121,13 +121,6 @@ func TestUnavailableSandboxAndUtilHelpers(t *testing.T) {
 	if err := sb.Fs().WriteFile(context.Background(), "a.txt", []byte("x"), true); err == nil {
 		t.Fatal("expected Fs().WriteFile error")
 	}
-
-	if got := durationMs(123).Milliseconds(); got != 123 {
-		t.Fatalf("durationMs() got %d, want 123", got)
-	}
-	if asExitError(errors.New("x"), nil) {
-		t.Fatal("asExitError should be false for non-exit errors")
-	}
 }
 
 func TestHostFS_ReadFileWriteFile_Restricted(t *testing.T) {

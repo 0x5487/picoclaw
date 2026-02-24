@@ -32,7 +32,7 @@ func NewFromConfigWithAgent(workspace string, restrict bool, cfg *config.Config,
 	scope := "agent"
 	workspaceAccess := "none"
 	workspaceRoot := "~/.picoclaw/sandboxes"
-	image := "debian:bookworm-slim"
+	image := "picoclaw-sandbox:bookworm-slim"
 	containerPrefix := "picoclaw-sandbox-"
 	pruneIdleHours := 24
 	pruneMaxAgeDays := 7

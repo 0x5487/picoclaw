@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 type HostSandbox struct {
@@ -75,7 +76,7 @@ func (h *HostSandbox) ExecStream(
 	cmdCtx := ctx
 	cancel := func() {}
 	if req.TimeoutMs > 0 {
-		cmdCtx, cancel = context.WithTimeout(ctx, durationMs(req.TimeoutMs))
+		cmdCtx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutMs)*time.Millisecond)
 	}
 	defer cancel()
 
@@ -165,8 +166,8 @@ func (h *HostSandbox) ExecStream(
 
 	exitCode := 0
 	if waitErr != nil {
-		var ee *exec.ExitError
-		if ok := asExitError(waitErr, &ee); ok {
+		ee, ok := waitErr.(*exec.ExitError)
+		if ok {
 			exitCode = ee.ExitCode()
 		} else {
 			return nil, waitErr

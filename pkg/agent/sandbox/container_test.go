@@ -270,7 +270,7 @@ func TestContainerSandbox_RegistryPath_UsesSandboxStateDir(t *testing.T) {
 		Workspace:     "/tmp/ws",
 		WorkspaceRoot: "/tmp/sbx",
 	})
-	want := filepath.Join(home, ".picoclaw", "sandbox", "containers.json")
+	want := filepath.Join(home, ".picoclaw", "sandboxes", "containers.json")
 	if got := sb.registryPath(); got != want {
 		t.Fatalf("registryPath = %q, want %q", got, want)
 	}
@@ -280,7 +280,7 @@ func TestContainerSandbox_RegistryPath_UsesPicoClawHomeOverride(t *testing.T) {
 	picoHome := t.TempDir()
 	t.Setenv("PICOCLAW_HOME", picoHome)
 	sb := NewContainerSandbox(ContainerSandboxConfig{})
-	want := filepath.Join(picoHome, "sandbox", "containers.json")
+	want := filepath.Join(picoHome, "sandboxes", "containers.json")
 	if got := sb.registryPath(); got != want {
 		t.Fatalf("registryPath = %q, want %q", got, want)
 	}

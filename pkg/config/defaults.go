@@ -23,7 +23,7 @@ func DefaultConfig() *Config {
 					WorkspaceAccess: "none",
 					WorkspaceRoot:   "~/.picoclaw/sandboxes",
 					Docker: AgentSandboxDockerConfig{
-						Image:           "openclaw-sandbox:bookworm-slim",
+						Image:           "picoclaw-sandbox:bookworm-slim",
 						ContainerPrefix: "picoclaw-sbx-",
 						Workdir:         "/workspace",
 						ReadOnlyRoot:    true,

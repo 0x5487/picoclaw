@@ -406,7 +406,7 @@ func (c *ContainerSandbox) binds() []string {
 	if hostDir != "" {
 		if c.cfg.WorkspaceAccess == "none" {
 			// Ensure the isolated directory exists on the host so Docker doesn't create it as root
-			_ = os.MkdirAll(hostDir, 0755)
+			_ = os.MkdirAll(hostDir, 0o755)
 		}
 		// Add :Z flag for SELinux (Podman) to label the content with a private unshared label.
 		// This fixes errors like: "crun: getcwd: Operation not permitted: OCI permission denied"

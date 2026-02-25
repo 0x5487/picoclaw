@@ -47,6 +47,21 @@ func NewAgentInstance(
 
 	model := resolveAgentModel(agentCfg, defaults)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
+
+	restrict := defaults.RestrictToWorkspace
+	toolsRegistry := tools.NewToolRegistry()
+	toolsRegistry.Register(tools.NewReadFileTool(workspace, restrict))
+	toolsRegistry.Register(tools.NewWriteFileTool(workspace, restrict))
+	toolsRegistry.Register(tools.NewListDirTool(workspace, restrict))
+	toolsRegistry.Register(tools.NewExecToolWithConfig(workspace, restrict, cfg))
+	toolsRegistry.Register(tools.NewEditFileTool(workspace, restrict))
+	toolsRegistry.Register(tools.NewAppendFileTool(workspace, restrict))
+
+	sessionsDir := filepath.Join(workspace, "sessions")
+	sessionsManager := session.NewSessionManager(sessionsDir)
+
+	contextBuilder := NewContextBuilder(workspace)
+
 	agentID := routing.DefaultAgentID
 	agentName := ""
 	var subagents *config.SubagentsConfig
@@ -58,9 +73,9 @@ func NewAgentInstance(
 		skillsFilter = agentCfg.Skills
 	}
 
-	restrict := defaults.RestrictToWorkspace
+	restrict = defaults.RestrictToWorkspace
 	roContainer := isContainerReadOnlySandbox(cfg)
-	toolsRegistry := tools.NewToolRegistry()
+	toolsRegistry = tools.NewToolRegistry()
 
 	sandboxManager := sandbox.NewFromConfigWithAgent(workspace, restrict, cfg, agentID)
 	isSandboxAllowed := func(toolName string) bool {
@@ -88,11 +103,10 @@ func NewAgentInstance(
 		}
 	}
 
-	sessionsDir := filepath.Join(workspace, "sessions")
-	sessionsManager := session.NewSessionManager(sessionsDir)
+	sessionsDir = filepath.Join(workspace, "sessions")
+	sessionsManager = session.NewSessionManager(sessionsDir)
 
-	contextBuilder := NewContextBuilder(workspace)
-	contextBuilder.SetToolsRegistry(toolsRegistry)
+	contextBuilder = NewContextBuilder(workspace)
 
 	maxIter := defaults.MaxToolIterations
 	if maxIter == 0 {
@@ -155,7 +169,7 @@ func resolveAgentModel(agentCfg *config.AgentConfig, defaults *config.AgentDefau
 	if agentCfg != nil && agentCfg.Model != nil && strings.TrimSpace(agentCfg.Model.Primary) != "" {
 		return strings.TrimSpace(agentCfg.Model.Primary)
 	}
-	return defaults.Model
+	return defaults.GetModelName()
 }
 
 // resolveAgentFallbacks resolves the fallback models for an agent.

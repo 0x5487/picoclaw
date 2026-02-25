@@ -75,8 +75,8 @@ func validateBindMounts(binds []string) error {
 		if err := validateBindSourcePath(bind, normalized); err != nil {
 			return err
 		}
-		if real := tryRealpathAbsolute(normalized); real != normalized {
-			if err := validateBindSourcePath(bind, real); err != nil {
+		if resolvedPath := tryRealpathAbsolute(normalized); resolvedPath != normalized {
+			if err := validateBindSourcePath(bind, resolvedPath); err != nil {
 				return err
 			}
 		}

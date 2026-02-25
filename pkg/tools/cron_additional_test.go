@@ -72,15 +72,6 @@ func (s *cronStubSandbox) ExecStream(
 	return &sandbox.ExecResult{Stdout: "ok", ExitCode: 0}, nil
 }
 
-type noopExecutor struct{}
-
-func (n *noopExecutor) ProcessDirectWithChannel(
-	ctx context.Context,
-	content, sessionKey, channel, chatID string,
-) (string, error) {
-	return "ok", nil
-}
-
 func TestCronTool_ExecuteJob_BlocksDangerousCommandViaGuard(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	sb := &cronStubSandbox{}

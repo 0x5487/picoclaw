@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/sipeed/picoclaw/internal/infra"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/skills"
 )
@@ -190,8 +191,7 @@ func printHelp() {
 }
 
 func getConfigPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".picoclaw", "config.json")
+	return filepath.Join(infra.ResolveHomeDir(), "config.json")
 }
 
 func loadConfig() (*config.Config, error) {

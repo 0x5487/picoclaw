@@ -24,6 +24,7 @@ import (
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-units"
 
+	"github.com/sipeed/picoclaw/internal/infra"
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
@@ -68,12 +69,16 @@ type ContainerSandbox struct {
 	hash     string
 }
 
-const defaultSandboxRegistryFile = "containers.json"
+const (
+	defaultSandboxRegistryFile = "containers.json"
+	DefaultSandboxImage        = "picoclaw-sandbox:bookworm-slim"
+	FallbackSandboxImage       = "debian:bookworm-slim"
+)
 
 // NewContainerSandbox creates a container sandbox with normalized defaults and precomputed config hash.
 func NewContainerSandbox(cfg ContainerSandboxConfig) *ContainerSandbox {
 	if strings.TrimSpace(cfg.Image) == "" {
-		cfg.Image = "picoclaw-sandbox:bookworm-slim"
+		cfg.Image = DefaultSandboxImage
 	}
 	if strings.TrimSpace(cfg.ContainerPrefix) == "" {
 		cfg.ContainerPrefix = "picoclaw-sandbox-"
@@ -148,13 +153,31 @@ func (c *ContainerSandbox) Start(ctx context.Context) error {
 	}
 
 	if _, err := c.cli.ImageInspect(ctx, c.cfg.Image); err != nil {
-		rc, pullErr := c.cli.ImagePull(ctx, c.cfg.Image, image.PullOptions{})
-		if pullErr != nil {
-			c.startErr = fmt.Errorf("docker image unavailable (%s): %w", c.cfg.Image, pullErr)
-			return c.startErr
+		if c.cfg.Image == DefaultSandboxImage {
+			// If default image is missing, try to pull fallback and tag it
+			rc, pullErr := c.cli.ImagePull(ctx, FallbackSandboxImage, image.PullOptions{})
+			if pullErr != nil {
+				c.startErr = fmt.Errorf("docker fallback image unavailable (%s): %w", FallbackSandboxImage, pullErr)
+				return c.startErr
+			}
+			defer rc.Close()
+			_, _ = io.Copy(io.Discard, rc)
+
+			// Tag debian:bookworm-slim as picoclaw-sandbox:bookworm-slim
+			if err := c.cli.ImageTag(ctx, FallbackSandboxImage, DefaultSandboxImage); err != nil {
+				c.startErr = fmt.Errorf("failed to tag fallback image: %w", err)
+				return c.startErr
+			}
+		} else {
+			// For non-default images, just try to pull directly
+			rc, pullErr := c.cli.ImagePull(ctx, c.cfg.Image, image.PullOptions{})
+			if pullErr != nil {
+				c.startErr = fmt.Errorf("docker image unavailable (%s): %w", c.cfg.Image, pullErr)
+				return c.startErr
+			}
+			defer rc.Close()
+			_, _ = io.Copy(io.Discard, rc)
 		}
-		defer rc.Close()
-		_, _ = io.Copy(io.Discard, rc)
 	}
 
 	return nil
@@ -371,17 +394,29 @@ func (c *ContainerSandbox) createAndStart(ctx context.Context) error {
 func (c *ContainerSandbox) binds() []string {
 	binds := make([]string, 0, 1+len(c.cfg.Binds))
 	workspace := strings.TrimSpace(c.cfg.Workspace)
+
+	// Determine the effective host directory to mount
+	var hostDir string
 	if workspace != "" {
-		abs, err := filepath.Abs(workspace)
-		if err == nil {
-			switch c.cfg.WorkspaceAccess {
-			case "ro":
-				binds = append(binds, fmt.Sprintf("%s:%s:ro", abs, c.cfg.Workdir))
-			case "rw":
-				binds = append(binds, fmt.Sprintf("%s:%s:rw", abs, c.cfg.Workdir))
-			default:
-				binds = append(binds, fmt.Sprintf("%s:%s", abs, c.cfg.Workdir))
-			}
+		if abs, err := filepath.Abs(workspace); err == nil {
+			hostDir = abs
+		}
+	}
+
+	if hostDir != "" {
+		if c.cfg.WorkspaceAccess == "none" {
+			// Ensure the isolated directory exists on the host so Docker doesn't create it as root
+			_ = os.MkdirAll(hostDir, 0755)
+		}
+		// Add :Z flag for SELinux (Podman) to label the content with a private unshared label.
+		// This fixes errors like: "crun: getcwd: Operation not permitted: OCI permission denied"
+		switch c.cfg.WorkspaceAccess {
+		case "ro":
+			binds = append(binds, fmt.Sprintf("%s:%s:ro,Z", hostDir, c.cfg.Workdir))
+		case "rw", "none":
+			binds = append(binds, fmt.Sprintf("%s:%s:rw,Z", hostDir, c.cfg.Workdir))
+		default:
+			// Default to no mount for unknown access types
 		}
 	}
 	for _, bind := range c.cfg.Binds {
@@ -397,19 +432,7 @@ func (c *ContainerSandbox) registryPath() string {
 }
 
 func (c *ContainerSandbox) sandboxStateDir() string {
-	return filepath.Join(resolvePicoClawHomeDir(), "sandboxes")
-}
-
-func resolvePicoClawHomeDir() string {
-	if envHome := strings.TrimSpace(os.Getenv("PICOCLAW_HOME")); envHome != "" {
-		if abs := resolveAbsPath(expandHomePath(envHome)); strings.TrimSpace(abs) != "" {
-			return abs
-		}
-	}
-	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-		return filepath.Join(home, ".picoclaw")
-	}
-	return filepath.Join(osTempDir(), ".picoclaw")
+	return filepath.Join(infra.ResolveHomeDir(), "sandboxes")
 }
 
 func (c *ContainerSandbox) stopAndRemoveContainer(ctx context.Context, containerName string) error {

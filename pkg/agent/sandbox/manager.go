@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sipeed/picoclaw/internal/infra"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/routing"
 )
@@ -275,8 +276,7 @@ func (m *scopedSandboxManager) pruneOnce(ctx context.Context) error {
 	if m.pruneIdleHours <= 0 && m.pruneMaxAgeDays <= 0 {
 		return nil
 	}
-
-	regPath := filepath.Join(resolvePicoClawHomeDir(), "sandbox", defaultSandboxRegistryFile)
+	regPath := filepath.Join(infra.ResolveHomeDir(), "sandbox", defaultSandboxRegistryFile)
 	registryMu.Lock()
 	data, err := loadRegistry(regPath)
 	registryMu.Unlock()

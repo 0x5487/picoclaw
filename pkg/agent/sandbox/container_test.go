@@ -238,7 +238,7 @@ func TestContainerSandbox_Binds_WorkspaceAccessModes(t *testing.T) {
 		Workdir:         "/workspace",
 	})
 	roBinds := ro.binds()
-	if len(roBinds) == 0 || !strings.HasSuffix(roBinds[0], ":/workspace:ro") {
+	if len(roBinds) == 0 || !strings.HasSuffix(roBinds[0], ":/workspace:ro,Z") {
 		t.Fatalf("unexpected ro bind: %#v", roBinds)
 	}
 
@@ -248,7 +248,7 @@ func TestContainerSandbox_Binds_WorkspaceAccessModes(t *testing.T) {
 		Workdir:         "/workspace",
 	})
 	rwBinds := rw.binds()
-	if len(rwBinds) == 0 || !strings.HasSuffix(rwBinds[0], ":/workspace:rw") {
+	if len(rwBinds) == 0 || !strings.HasSuffix(rwBinds[0], ":/workspace:rw,Z") {
 		t.Fatalf("unexpected rw bind: %#v", rwBinds)
 	}
 
@@ -256,10 +256,11 @@ func TestContainerSandbox_Binds_WorkspaceAccessModes(t *testing.T) {
 		Workspace:       filepath.Join(root, "ws-none"),
 		WorkspaceAccess: "none",
 		Workdir:         "/workspace",
+		ContainerName:   "test-none",
 	})
 	noneBinds := none.binds()
-	if len(noneBinds) == 0 || !strings.HasSuffix(noneBinds[0], ":/workspace") {
-		t.Fatalf("unexpected none bind: %#v", noneBinds)
+	if len(noneBinds) == 0 || !strings.HasSuffix(noneBinds[0], ":/workspace:rw,Z") {
+		t.Fatalf("expected none bind to isolated workspace, got: %#v", noneBinds)
 	}
 }
 

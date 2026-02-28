@@ -10,8 +10,8 @@ func TestIsToolSandboxEnabled_Default(t *testing.T) {
 	if !IsToolSandboxEnabled(nil, "exec") {
 		t.Fatal("expected exec to be sandbox-enabled by default")
 	}
-	if IsToolSandboxEnabled(nil, "list_dir") {
-		t.Fatal("expected list_dir to be host by default")
+	if !IsToolSandboxEnabled(nil, "list_dir") {
+		t.Fatal("expected list_dir to be sandbox-enabled by default")
 	}
 }
 
@@ -31,21 +31,19 @@ func TestIsToolSandboxEnabled_AllowDeny(t *testing.T) {
 	}
 }
 
-// TestIsToolSandboxEnabled_EmptyAllowDeniesAll verifies BOUNDARY-1 fix:
-// an explicitly empty allow list now means "deny all tools" (principle of least privilege).
-func TestIsToolSandboxEnabled_EmptyAllowDeniesAll(t *testing.T) {
+// TestIsToolSandboxEnabled_EmptyAllowUsesDefault verifies that an explicitly
+// empty allow list falls back to built-in defaults.
+func TestIsToolSandboxEnabled_EmptyAllowUsesDefault(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Tools.Sandbox.Tools.Allow = []string{}
 	cfg.Tools.Sandbox.Tools.Deny = []string{"cron"}
 
-	// Empty explicit allow should now deny everything (including read_file which was previously allowed)
-	if IsToolSandboxEnabled(cfg, "read_file") {
-		t.Fatal("expected read_file to be DISABLED when allow list is explicitly empty (deny all)")
+	for _, tool := range []string{"exec", "read_file", "write_file", "list_dir", "edit_file", "append_file"} {
+		if !IsToolSandboxEnabled(cfg, tool) {
+			t.Fatalf("expected %s to use default allow list when allow is empty", tool)
+		}
 	}
-	if IsToolSandboxEnabled(cfg, "exec") {
-		t.Fatal("expected exec to be DISABLED when allow list is explicitly empty (deny all)")
-	}
-	// Deny list still applies (as a belt-and-suspenders check)
+
 	if IsToolSandboxEnabled(cfg, "cron") {
 		t.Fatal("expected denied tool to be disabled")
 	}

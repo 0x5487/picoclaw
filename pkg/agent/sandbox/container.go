@@ -103,6 +103,10 @@ func NewContainerSandbox(cfg ContainerSandboxConfig) *ContainerSandbox {
 	if cfg.Env == nil {
 		cfg.Env = map[string]string{"LANG": "C.UTF-8"}
 	}
+	cfg.Env = sanitizeEnvVars(cfg.Env)
+	if len(cfg.Env) == 0 {
+		cfg.Env = map[string]string{"LANG": "C.UTF-8"}
+	}
 	cfg.WorkspaceAccess = string(normalizeWorkspaceAccess(config.WorkspaceAccess(cfg.WorkspaceAccess)))
 	cfg.WorkspaceRoot = strings.TrimSpace(cfg.WorkspaceRoot)
 	sb := &ContainerSandbox{cfg: cfg}

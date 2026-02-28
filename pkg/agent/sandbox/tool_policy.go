@@ -6,7 +6,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
-var defaultSandboxAllow = []string{"exec", "read_file", "write_file"}
+var defaultSandboxAllow = []string{"exec", "read_file", "write_file", "list_dir", "edit_file", "append_file"}
 
 func IsToolSandboxEnabled(cfg *config.Config, tool string) bool {
 	name := strings.ToLower(strings.TrimSpace(tool))
@@ -14,26 +14,19 @@ func IsToolSandboxEnabled(cfg *config.Config, tool string) bool {
 		return false
 	}
 
-	allow, hasAllow := defaultSandboxAllow, false
+	allow := defaultSandboxAllow
 	deny := []string{}
 	if cfg != nil {
 		allow = cfg.Tools.Sandbox.Tools.Allow
 		deny = cfg.Tools.Sandbox.Tools.Deny
-		hasAllow = cfg.Tools.Sandbox.Tools.Allow != nil
 	}
 
 	if containsTool(deny, name) {
 		return false
 	}
-	if !hasAllow {
-		// No allow list configured: use the built-in default set.
-		return containsTool(defaultSandboxAllow, name)
-	}
 	if len(allow) == 0 {
-		// Explicit empty allow list means "deny all" — no tool gets
-		// sandbox routing. This is the intuitive interpretation: an empty
-		// allowlist blocks everything (principle of least privilege).
-		return false
+		// Empty allow list falls back to built-in defaults.
+		allow = defaultSandboxAllow
 	}
 	return containsTool(allow, name)
 }

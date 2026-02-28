@@ -233,6 +233,16 @@ func TestHostFS_ReadFileWriteFile_Unrestricted(t *testing.T) {
 	}
 }
 
+func TestHostFS_WriteFile_Unrestricted_NoMkdirMissingParent(t *testing.T) {
+	root := t.TempDir()
+	sb := NewHostSandbox(root, false)
+
+	err := sb.Fs().WriteFile(context.Background(), "missing/parent/file.txt", []byte("x"), false)
+	if err == nil {
+		t.Fatalf("expected WriteFile to fail when parent directory is missing and mkdir=false")
+	}
+}
+
 func TestHostFS_WriteFileMKdir(t *testing.T) {
 	root := t.TempDir()
 	sb := NewHostSandbox(root, true)
@@ -350,6 +360,24 @@ func TestValidatePathErrors(t *testing.T) {
 	_, err := ValidatePath("/a/b/c", "", true)
 	if err == nil {
 		t.Fatalf("expected err for empty workspace with restrict=true")
+	}
+
+	absTarget := filepath.Join(t.TempDir(), "abs.txt")
+	got, err := ValidatePath(absTarget, "", false)
+	if err != nil {
+		t.Fatalf("expected unrestricted empty-workspace absolute path to pass, got: %v", err)
+	}
+	if got != absTarget {
+		t.Fatalf("ValidatePath(abs, empty, false) = %q, want %q", got, absTarget)
+	}
+
+	relTarget := "rel.txt"
+	got, err = ValidatePath(relTarget, "", false)
+	if err != nil {
+		t.Fatalf("expected unrestricted empty-workspace relative path to pass, got: %v", err)
+	}
+	if !filepath.IsAbs(got) {
+		t.Fatalf("ValidatePath(rel, empty, false) should return abs path, got %q", got)
 	}
 
 	root := t.TempDir()

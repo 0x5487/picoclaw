@@ -318,7 +318,7 @@ func TestFilesystemTool_EmptyWorkspace_AccessDenied(t *testing.T) {
 	os.WriteFile(secretFile, []byte("secret data"), 0o600)
 
 	result := tool.Execute(sandbox.WithSandbox(context.Background(), &stubSandbox{
-		err: fmt.Errorf("workspace is not defined"),
+		fs: sandbox.NewHostSandbox("", true).Fs(),
 	}), map[string]any{
 		"path": secretFile,
 	})
@@ -328,6 +328,25 @@ func TestFilesystemTool_EmptyWorkspace_AccessDenied(t *testing.T) {
 
 	// Verify it failed for the right reason
 	assert.Contains(t, result.ForLLM, "workspace is not defined", "Expected 'workspace is not defined' error")
+}
+
+func TestFilesystemTool_EmptyWorkspace_UnrestrictedAllowed(t *testing.T) {
+	tool := NewReadFileTool("", false) // restrict=false and workspace=""
+
+	tmpDir := t.TempDir()
+	secretFile := filepath.Join(tmpDir, "public.txt")
+	if err := os.WriteFile(secretFile, []byte("public data"), 0o644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	result := tool.Execute(sandbox.WithSandbox(context.Background(), &stubSandbox{
+		fs: sandbox.NewHostSandbox("", false).Fs(),
+	}), map[string]any{
+		"path": secretFile,
+	})
+
+	assert.False(t, result.IsError, "Expected unrestricted empty-workspace read to succeed, got: %s", result.ForLLM)
+	assert.Contains(t, result.ForLLM, "public data")
 }
 
 // TestRootMkdirAll verifies that root.MkdirAll (used by atomicWriteFileInRoot) handles all cases:

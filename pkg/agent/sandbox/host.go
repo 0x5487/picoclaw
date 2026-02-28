@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/fileutil"
 )
 
 type HostSandbox struct {
@@ -239,22 +241,19 @@ func (h *hostFS) WriteFile(ctx context.Context, path string, data []byte, mkdir 
 		if err != nil {
 			return err
 		}
-		if mkdir {
-			if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
+
+		parent := filepath.Dir(resolved)
+		if !mkdir {
+			parentInfo, err := os.Stat(parent)
+			if err != nil {
 				return err
 			}
+			if !parentInfo.IsDir() {
+				return fmt.Errorf("parent path is not a directory: %s", parent)
+			}
 		}
-		// Atomic write: write to temp file then rename to prevent partial writes.
-		tmpPath := fmt.Sprintf("%s.%d.tmp", resolved, time.Now().UnixNano())
-		if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
-			os.Remove(tmpPath)
-			return fmt.Errorf("failed to write temp file: %w", err)
-		}
-		if err := os.Rename(tmpPath, resolved); err != nil {
-			os.Remove(tmpPath)
-			return fmt.Errorf("failed to replace original file: %w", err)
-		}
-		return nil
+
+		return fileutil.WriteFileAtomic(resolved, data, 0o644)
 	}
 
 	relPath, err := h.getSafeRelPath(path)
@@ -268,16 +267,54 @@ func (h *hostFS) WriteFile(ctx context.Context, path string, data []byte, mkdir 
 			return err
 		}
 	}
-	// Atomic write within os.Root: write to temp file then rename.
-	tmpRelPath := fmt.Sprintf("%s.%d.tmp", relPath, time.Now().UnixNano())
-	if err := h.root.WriteFile(tmpRelPath, data, 0o644); err != nil {
-		h.root.Remove(tmpRelPath)
+	return writeFileAtomicInRoot(h.root, relPath, data)
+}
+
+func writeFileAtomicInRoot(root *os.Root, relPath string, data []byte) error {
+	dir := filepath.Dir(relPath)
+	tmpName := fmt.Sprintf(".tmp-%d-%d", os.Getpid(), time.Now().UnixNano())
+	tmpRelPath := tmpName
+	if dir != "." && dir != "/" {
+		tmpRelPath = filepath.Join(dir, tmpName)
+	}
+
+	tmpFile, err := root.OpenFile(tmpRelPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		_ = root.Remove(tmpRelPath)
+		return fmt.Errorf("failed to open temp file: %w", err)
+	}
+
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		_ = root.Remove(tmpRelPath)
 		return fmt.Errorf("failed to write temp file: %w", err)
 	}
-	if err := h.root.Rename(tmpRelPath, relPath); err != nil {
-		h.root.Remove(tmpRelPath)
+
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		_ = root.Remove(tmpRelPath)
+		return fmt.Errorf("failed to sync temp file: %w", err)
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		_ = root.Remove(tmpRelPath)
+		return fmt.Errorf("failed to close temp file: %w", err)
+	}
+
+	if err := root.Rename(tmpRelPath, relPath); err != nil {
+		_ = root.Remove(tmpRelPath)
 		return fmt.Errorf("failed to rename temp file over target: %w", err)
 	}
+
+	syncDir := "."
+	if dir != "" && dir != "/" {
+		syncDir = dir
+	}
+	if dirFile, err := root.Open(syncDir); err == nil {
+		_ = dirFile.Sync()
+		_ = dirFile.Close()
+	}
+
 	return nil
 }
 

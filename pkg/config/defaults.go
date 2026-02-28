@@ -370,7 +370,7 @@ func DefaultConfig() *Config {
 			},
 			Sandbox: SandboxToolsConfig{
 				Tools: SandboxToolPolicyConfig{
-					Allow: []string{"exec", "read_file", "write_file"},
+					Allow: []string{"exec", "read_file", "write_file", "list_dir", "edit_file", "append_file"},
 					Deny:  []string{"cron"},
 				},
 			},

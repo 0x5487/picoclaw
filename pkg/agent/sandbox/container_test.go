@@ -536,3 +536,25 @@ func TestContainerSandbox_StopWithoutClient(t *testing.T) {
 		t.Fatalf("Prune() error: %v", err)
 	}
 }
+
+func TestNewContainerSandbox_SanitizesEnv(t *testing.T) {
+	sb := NewContainerSandbox(ContainerSandboxConfig{
+		Env: map[string]string{
+			"LANG":           "C.UTF-8",
+			"OPENAI_API_KEY": "secret",
+			"SAFE_NAME":      "ok",
+		},
+	})
+
+	got := sb.containerEnv()
+	joined := strings.Join(got, "\n")
+	if strings.Contains(joined, "OPENAI_API_KEY=") {
+		t.Fatalf("sensitive env key should be filtered, got: %v", got)
+	}
+	if !strings.Contains(joined, "SAFE_NAME=ok") {
+		t.Fatalf("safe env key should be preserved, got: %v", got)
+	}
+	if !strings.Contains(joined, "LANG=C.UTF-8") {
+		t.Fatalf("LANG should be preserved or defaulted, got: %v", got)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/routing"
 )
 
 func TestNormalizeWorkspaceAccess(t *testing.T) {
@@ -94,7 +95,7 @@ func TestScopedSandboxManager_PruneLoopLifecycle(t *testing.T) {
 func TestScopedSandboxManager_PruneOnceLoadRegistryError(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	stateDir := filepath.Join(home, ".picoclaw", "sandbox")
+	stateDir := filepath.Join(home, ".picoclaw", "sandboxes")
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		t.Fatalf("mkdir state dir: %v", err)
 	}
@@ -111,5 +112,30 @@ func TestScopedSandboxManager_PruneOnceLoadRegistryError(t *testing.T) {
 	}
 	if err := m.pruneOnce(context.Background()); err == nil {
 		t.Fatal("expected pruneOnce() to return registry load error")
+	}
+}
+
+func TestScopedSandboxManager_ShouldSandbox_NonMain(t *testing.T) {
+	m := &scopedSandboxManager{
+		mode:    config.SandboxModeNonMain,
+		agentID: "default",
+	}
+
+	if m.shouldSandbox(context.Background()) {
+		t.Fatal("expected background context to map to main session (host path)")
+	}
+
+	if m.shouldSandbox(WithSessionKey(context.Background(), "main")) {
+		t.Fatal("expected explicit main alias to remain host path")
+	}
+
+	mainKey := routing.BuildAgentMainSessionKey("default")
+	if m.shouldSandbox(WithSessionKey(context.Background(), mainKey)) {
+		t.Fatal("expected agent main session key to remain host path")
+	}
+
+	nonMainKey := "agent:default:direct:user-1"
+	if !m.shouldSandbox(WithSessionKey(context.Background(), nonMainKey)) {
+		t.Fatal("expected non-main session to use sandbox path")
 	}
 }

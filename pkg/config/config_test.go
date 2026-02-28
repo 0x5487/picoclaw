@@ -377,6 +377,18 @@ func TestDefaultConfig_SandboxTools(t *testing.T) {
 	if len(cfg.Tools.Sandbox.Tools.Allow) == 0 {
 		t.Fatal("Expected sandbox allow tools to be configured")
 	}
+	for _, tool := range []string{"exec", "read_file", "write_file", "list_dir", "edit_file", "append_file"} {
+		found := false
+		for _, v := range cfg.Tools.Sandbox.Tools.Allow {
+			if v == tool {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("Expected sandbox allow tools to include %q, got %v", tool, cfg.Tools.Sandbox.Tools.Allow)
+		}
+	}
 	if cfg.Agents.Defaults.Sandbox.Prune.IdleHours == nil || *cfg.Agents.Defaults.Sandbox.Prune.IdleHours <= 0 {
 		t.Fatal("Expected sandbox prune idle hours > 0")
 	}

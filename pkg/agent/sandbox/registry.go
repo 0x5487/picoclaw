@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/fileutil"
 )
 
 type registryEntry struct {
@@ -89,22 +91,11 @@ func loadRegistry(path string) (*registryData, error) {
 }
 
 func saveRegistry(path string, data *registryData) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	raw, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := fmt.Sprintf("%s.%d.tmp", path, time.Now().UnixNano())
-	if err := os.WriteFile(tmp, append(raw, '\n'), 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	return fileutil.WriteFileAtomic(path, append(raw, '\n'), 0o644)
 }
 
 func upsertRegistryEntry(path string, entry registryEntry) error {

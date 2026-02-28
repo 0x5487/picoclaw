@@ -9,7 +9,17 @@ import (
 // ValidatePath ensures the given path is within the workspace if restrict is true.
 func ValidatePath(path, workspace string, restrict bool) (string, error) {
 	if workspace == "" {
-		return "", fmt.Errorf("workspace is not defined")
+		if restrict {
+			return "", fmt.Errorf("workspace is not defined")
+		}
+		if filepath.IsAbs(path) {
+			return filepath.Clean(path), nil
+		}
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve file path: %w", err)
+		}
+		return absPath, nil
 	}
 
 	absWorkspace, err := filepath.Abs(workspace)

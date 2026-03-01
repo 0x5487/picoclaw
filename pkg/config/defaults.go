@@ -43,6 +43,7 @@ func DefaultConfig() *Config {
 						ApparmorProfile: "",
 						DNS:             []string{},
 						ExtraHosts:      []string{},
+						CapDrop:         []string{"ALL"},
 						Binds:           []string{},
 					},
 					Prune: AgentSandboxPruneConfig{

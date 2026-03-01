@@ -653,7 +653,7 @@ func (f *containerFS) WriteFile(ctx context.Context, p string, data []byte, mkdi
 	defer attach.Close()
 
 	// Write data to the hijacked connection's stdin
-	if _, err := attach.Conn.Write(data); err != nil {
+	if _, err = attach.Conn.Write(data); err != nil {
 		return fmt.Errorf("failed to write data to container: %w", err)
 	}
 

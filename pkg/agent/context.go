@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -253,10 +254,8 @@ func (cb *ContextBuilder) sourceFilesChangedLocked() bool {
 	}
 
 	// Check tracked source files (bootstrap + memory).
-	for _, p := range cb.sourcePaths() {
-		if cb.fileChangedSince(p) {
-			return true
-		}
+	if slices.ContainsFunc(cb.sourcePaths(), cb.fileChangedSince) {
+		return true
 	}
 
 	// --- Skills directory (handled separately from sourcePaths) ---

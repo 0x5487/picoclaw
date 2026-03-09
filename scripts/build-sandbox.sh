@@ -5,7 +5,7 @@ set -e
 
 # Base directory
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DOCKERFILE="${REPO_ROOT}/Dockerfile.sandbox"
+DOCKERFILE="${REPO_ROOT}/docker/Dockerfile.sandbox"
 IMAGE_NAME="picoclaw-sandbox:bookworm-slim"
 
 echo "Building PicoClaw sandbox image: ${IMAGE_NAME}..."

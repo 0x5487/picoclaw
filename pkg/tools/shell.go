@@ -20,6 +20,7 @@ type ExecTool struct {
 	timeout             time.Duration
 	denyPatterns        []*regexp.Regexp
 	allowPatterns       []*regexp.Regexp
+	customAllowPatterns []*regexp.Regexp
 	restrictToWorkspace bool
 }
 
@@ -33,7 +34,10 @@ var (
 			`\b(format|mkfs|diskpart)\b\s`,
 		),
 		regexp.MustCompile(`\bdd\s+if=`),
-		regexp.MustCompile(`>\s*/dev/sd[a-z]\b`), // Block writes to disk devices (but allow /dev/null)
+		// Block writes to block devices (all common naming schemes).
+		regexp.MustCompile(
+			`>\s*/dev/(sd[a-z]|hd[a-z]|vd[a-z]|xvd[a-z]|nvme\d|mmcblk\d|loop\d|dm-\d|md\d|sr\d|nbd\d)`,
+		),
 		regexp.MustCompile(`\b(shutdown|reboot|poweroff)\b`),
 		regexp.MustCompile(`:\(\)\s*\{.*\};\s*:`),
 		regexp.MustCompile(`\$\([^)]+\)`),
@@ -44,7 +48,6 @@ var (
 		regexp.MustCompile(`;\s*rm\s+-[rf]`),
 		regexp.MustCompile(`&&\s*rm\s+-[rf]`),
 		regexp.MustCompile(`\|\|\s*rm\s+-[rf]`),
-		regexp.MustCompile(`>\s*/dev/null\s*>&?\s*\d?`),
 		regexp.MustCompile(`<<\s*EOF`),
 		regexp.MustCompile(`\$\(\s*cat\s+`),
 		regexp.MustCompile(`\$\(\s*curl\s+`),
@@ -55,7 +58,7 @@ var (
 		regexp.MustCompile(`\bchown\b`),
 		regexp.MustCompile(`\bpkill\b`),
 		regexp.MustCompile(`\bkillall\b`),
-		regexp.MustCompile(`\bkill\s+-[9]\b`),
+		regexp.MustCompile(`\bkill\b`),
 		regexp.MustCompile(`\bcurl\b.*\|\s*(sh|bash)`),
 		regexp.MustCompile(`\bwget\b.*\|\s*(sh|bash)`),
 		regexp.MustCompile(`\bnpm\s+install\s+-g\b`),
@@ -74,6 +77,19 @@ var (
 
 	// absolutePathPattern matches absolute file paths in commands (Unix and Windows).
 	absolutePathPattern = regexp.MustCompile(`[A-Za-z]:\\[^\\\"']+|/[^\s\"']+`)
+
+	// safePaths are kernel pseudo-devices that are always safe to reference in
+	// commands, regardless of workspace restriction. They contain no user data
+	// and cannot cause destructive writes.
+	safePaths = map[string]bool{
+		"/dev/null":    true,
+		"/dev/zero":    true,
+		"/dev/random":  true,
+		"/dev/urandom": true,
+		"/dev/stdin":   true,
+		"/dev/stdout":  true,
+		"/dev/stderr":  true,
+	}
 )
 
 func NewExecTool(workingDir string, restrict bool) (*ExecTool, error) {
@@ -82,6 +98,7 @@ func NewExecTool(workingDir string, restrict bool) (*ExecTool, error) {
 
 func NewExecToolWithConfig(workingDir string, restrict bool, config *config.Config) (*ExecTool, error) {
 	denyPatterns := make([]*regexp.Regexp, 0)
+	customAllowPatterns := make([]*regexp.Regexp, 0)
 
 	if config != nil {
 		execConfig := config.Tools.Exec
@@ -102,15 +119,28 @@ func NewExecToolWithConfig(workingDir string, restrict bool, config *config.Conf
 			// If deny patterns are disabled, we won't add any patterns, allowing all commands.
 			fmt.Println("Warning: deny patterns are disabled. All commands will be allowed.")
 		}
+		for _, pattern := range execConfig.CustomAllowPatterns {
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				return nil, fmt.Errorf("invalid custom allow pattern %q: %w", pattern, err)
+			}
+			customAllowPatterns = append(customAllowPatterns, re)
+		}
 	} else {
 		denyPatterns = append(denyPatterns, defaultDenyPatterns...)
 	}
 
+	timeout := 60 * time.Second
+	if config != nil && config.Tools.Exec.TimeoutSeconds > 0 {
+		timeout = time.Duration(config.Tools.Exec.TimeoutSeconds) * time.Second
+	}
+
 	return &ExecTool{
 		workingDir:          workingDir,
-		timeout:             60 * time.Second,
+		timeout:             timeout,
 		denyPatterns:        denyPatterns,
 		allowPatterns:       nil,
+		customAllowPatterns: customAllowPatterns,
 		restrictToWorkspace: restrict,
 	}, nil
 }
@@ -242,6 +272,12 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 }
 
 func (t *ExecTool) guardCommand(command, cwd string) string {
+	lower := strings.ToLower(strings.TrimSpace(command))
+	for _, pattern := range t.customAllowPatterns {
+		if pattern.MatchString(lower) {
+			return guardCommandWithPolicy(command, cwd, t.restrictToWorkspace, nil, t.allowPatterns)
+		}
+	}
 	return guardCommandWithPolicy(
 		command,
 		cwd,
@@ -293,6 +329,10 @@ func guardCommandWithPolicy(
 		for _, raw := range matches {
 			p, err := filepath.Abs(raw)
 			if err != nil {
+				continue
+			}
+
+			if safePaths[p] {
 				continue
 			}
 

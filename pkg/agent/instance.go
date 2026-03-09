@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/agent/sandbox"
@@ -17,23 +19,34 @@ import (
 // AgentInstance represents a fully configured agent with its own workspace,
 // session manager, context builder, and tool registry.
 type AgentInstance struct {
-	ID             string
-	Name           string
-	Model          string
-	Fallbacks      []string
-	Workspace      string
-	MaxIterations  int
-	MaxTokens      int
-	Temperature    float64
-	ContextWindow  int
-	Provider       providers.LLMProvider
-	Sessions       *session.SessionManager
-	ContextBuilder *ContextBuilder
-	Tools          *tools.ToolRegistry
-	SandboxManager sandbox.Manager
-	Subagents      *config.SubagentsConfig
-	SkillsFilter   []string
-	Candidates     []providers.FallbackCandidate
+	ID                        string
+	Name                      string
+	Model                     string
+	Fallbacks                 []string
+	Workspace                 string
+	MaxIterations             int
+	MaxTokens                 int
+	Temperature               float64
+	ThinkingLevel             ThinkingLevel
+	ContextWindow             int
+	SummarizeMessageThreshold int
+	SummarizeTokenPercent     int
+	Provider                  providers.LLMProvider
+	Sessions                  *session.SessionManager
+	ContextBuilder            *ContextBuilder
+	Tools                     *tools.ToolRegistry
+	Subagents                 *config.SubagentsConfig
+	SkillsFilter              []string
+	Candidates                []providers.FallbackCandidate
+
+	// Router is non-nil when model routing is configured and the light model
+	// was successfully resolved. It scores each incoming message and decides
+	// whether to route to LightCandidates or stay with Candidates.
+	Router *routing.Router
+	// LightCandidates holds the resolved provider candidates for the light model.
+	// Pre-computed at agent creation to avoid repeated model_list lookups at runtime.
+	LightCandidates []providers.FallbackCandidate
+	SandboxManager  sandbox.Manager
 }
 
 // NewAgentInstance creates an agent instance from config.
@@ -48,7 +61,12 @@ func NewAgentInstance(
 
 	model := resolveAgentModel(agentCfg, defaults)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
+	restrict := defaults.RestrictToWorkspace
+	readRestrict := restrict && !defaults.AllowReadOutsideWorkspace
 
+	// Compile path whitelist patterns from config.
+	allowReadPaths := compilePatterns(cfg.Tools.AllowReadPaths)
+	allowWritePaths := compilePatterns(cfg.Tools.AllowWritePaths)
 	agentID := routing.DefaultAgentID
 	agentName := ""
 	var subagents *config.SubagentsConfig
@@ -60,26 +78,25 @@ func NewAgentInstance(
 		skillsFilter = agentCfg.Skills
 	}
 
-	restrict := defaults.RestrictToWorkspace
 	roContainer := isContainerReadOnlySandbox(cfg)
 	toolsRegistry := tools.NewToolRegistry()
 
 	sandboxManager := sandbox.NewFromConfigWithAgent(workspace, restrict, cfg, agentID)
 	isToolEnabled := func(toolName string) bool {
-		if isSandboxModeOff(cfg) {
-			return true
+		if cfg != nil && !cfg.Tools.IsToolEnabled(toolName) {
+			return false
 		}
-		return sandbox.IsToolSandboxEnabled(cfg, toolName)
+		return isSandboxModeOff(cfg) || sandbox.IsToolSandboxEnabled(cfg, toolName)
 	}
 
 	if isToolEnabled("read_file") {
-		toolsRegistry.Register(tools.NewReadFileTool(workspace, restrict))
+		toolsRegistry.Register(tools.NewReadFileTool(workspace, readRestrict, allowReadPaths))
 	}
 	if !roContainer && isToolEnabled("write_file") {
-		toolsRegistry.Register(tools.NewWriteFileTool(workspace, restrict))
+		toolsRegistry.Register(tools.NewWriteFileTool(workspace, restrict, allowWritePaths))
 	}
 	if isToolEnabled("list_dir") {
-		toolsRegistry.Register(tools.NewListDirTool(workspace, restrict))
+		toolsRegistry.Register(tools.NewListDirTool(workspace, readRestrict, allowReadPaths))
 	}
 	if isToolEnabled("exec") {
 		execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg)
@@ -90,10 +107,10 @@ func NewAgentInstance(
 	}
 	if !roContainer {
 		if isToolEnabled("edit_file") {
-			toolsRegistry.Register(tools.NewEditFileTool(workspace, restrict))
+			toolsRegistry.Register(tools.NewEditFileTool(workspace, restrict, allowWritePaths))
 		}
 		if isToolEnabled("append_file") {
-			toolsRegistry.Register(tools.NewAppendFileTool(workspace, restrict))
+			toolsRegistry.Register(tools.NewAppendFileTool(workspace, restrict, allowWritePaths))
 		}
 	}
 
@@ -117,6 +134,23 @@ func NewAgentInstance(
 		temperature = *defaults.Temperature
 	}
 
+	var thinkingLevelStr string
+	if mc, err := cfg.GetModelConfig(model); err == nil {
+		thinkingLevelStr = mc.ThinkingLevel
+	}
+	thinkingLevel := parseThinkingLevel(thinkingLevelStr)
+
+	summarizeMessageThreshold := defaults.SummarizeMessageThreshold
+	if summarizeMessageThreshold == 0 {
+		summarizeMessageThreshold = 20
+	}
+
+	summarizeTokenPercent := defaults.SummarizeTokenPercent
+	if summarizeTokenPercent == 0 {
+		summarizeTokenPercent = 75
+	}
+
+	// Resolve fallback candidates
 	modelCfg := providers.ModelConfig{
 		Primary:   model,
 		Fallbacks: fallbacks,
@@ -163,24 +197,48 @@ func NewAgentInstance(
 
 	candidates := providers.ResolveCandidatesWithLookup(modelCfg, defaults.Provider, resolveFromModelList)
 
+	// Model routing setup: pre-resolve light model candidates at creation time
+	// to avoid repeated model_list lookups on every incoming message.
+	var router *routing.Router
+	var lightCandidates []providers.FallbackCandidate
+	if rc := defaults.Routing; rc != nil && rc.Enabled && rc.LightModel != "" {
+		lightModelCfg := providers.ModelConfig{Primary: rc.LightModel}
+		resolved := providers.ResolveCandidatesWithLookup(lightModelCfg, defaults.Provider, resolveFromModelList)
+		if len(resolved) > 0 {
+			router = routing.New(routing.RouterConfig{
+				LightModel: rc.LightModel,
+				Threshold:  rc.Threshold,
+			})
+			lightCandidates = resolved
+		} else {
+			log.Printf("routing: light_model %q not found in model_list — routing disabled for agent %q",
+				rc.LightModel, agentID)
+		}
+	}
+
 	return &AgentInstance{
-		ID:             agentID,
-		Name:           agentName,
-		Model:          model,
-		Fallbacks:      fallbacks,
-		Workspace:      workspace,
-		MaxIterations:  maxIter,
-		MaxTokens:      maxTokens,
-		Temperature:    temperature,
-		ContextWindow:  maxTokens,
-		Provider:       provider,
-		Sessions:       sessionsManager,
-		ContextBuilder: contextBuilder,
-		Tools:          toolsRegistry,
-		SandboxManager: sandboxManager,
-		Subagents:      subagents,
-		SkillsFilter:   skillsFilter,
-		Candidates:     candidates,
+		ID:                        agentID,
+		Name:                      agentName,
+		Model:                     model,
+		Fallbacks:                 fallbacks,
+		Workspace:                 workspace,
+		MaxIterations:             maxIter,
+		MaxTokens:                 maxTokens,
+		Temperature:               temperature,
+		ThinkingLevel:             thinkingLevel,
+		ContextWindow:             maxTokens,
+		SummarizeMessageThreshold: summarizeMessageThreshold,
+		SummarizeTokenPercent:     summarizeTokenPercent,
+		Provider:                  provider,
+		Sessions:                  sessionsManager,
+		ContextBuilder:            contextBuilder,
+		Tools:                     toolsRegistry,
+		SandboxManager:            sandboxManager,
+		Subagents:                 subagents,
+		SkillsFilter:              skillsFilter,
+		Candidates:                candidates,
+		Router:                    router,
+		LightCandidates:           lightCandidates,
 	}
 }
 
@@ -227,6 +285,19 @@ func isSandboxModeOff(cfg *config.Config) bool {
 		return false
 	}
 	return cfg.Agents.Defaults.Sandbox.Mode == config.SandboxModeOff
+}
+
+func compilePatterns(patterns []string) []*regexp.Regexp {
+	compiled := make([]*regexp.Regexp, 0, len(patterns))
+	for _, p := range patterns {
+		re, err := regexp.Compile(p)
+		if err != nil {
+			fmt.Printf("Warning: invalid path pattern %q: %v\n", p, err)
+			continue
+		}
+		compiled = append(compiled, re)
+	}
+	return compiled
 }
 
 func expandHome(path string) string {
